@@ -18,7 +18,7 @@ package ghidra.app.plugin.core.debug.service.emulation;
 import java.io.IOException;
 import java.util.*;
 import java.util.Map.Entry;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 import javax.swing.Icon;
@@ -45,6 +45,7 @@ import ghidra.async.AsyncLazyMap;
 import ghidra.debug.api.control.ControlMode;
 import ghidra.debug.api.emulation.DebuggerPcodeEmulatorFactory;
 import ghidra.debug.api.emulation.DebuggerPcodeMachine;
+import ghidra.debug.api.modules.DebuggerStaticMappingChangeListener;
 import ghidra.debug.api.tracemgr.DebuggerCoordinates;
 import ghidra.framework.plugintool.*;
 import ghidra.framework.plugintool.annotation.AutoServiceConsumed;
@@ -498,7 +499,7 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 		/*TraceMemoryRegion region = current.getTrace()
 				.getMemoryManager()
 				.getRegionContaining(current.getSnap(), traceLoc.getAddress());
-		return region != null && region.isExecute()*/;
+		return region != null && region.isExecute();*/
 		return true;
 	}
 
@@ -553,6 +554,16 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 	}
 
 	private void invalidateCacheActivated(ActionContext ignored) {
+		invalidateCache();
+	}
+
+	private void configureEmulatorActivated(DebuggerPcodeEmulatorFactory factory) {
+		// TODO: Pull up config page. Tool Options? Program/Trace Options?
+		setEmulatorFactory(factory);
+	}
+
+	@Override
+	public void invalidateCache() {
 		DebuggerCoordinates current = traceManager.getCurrent();
 		Trace trace = current.getTrace();
 		long version = trace.getEmulatorCacheVersion();
@@ -564,11 +575,6 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 		// NB. Success should already display on screen, since it's current.
 		// Failure should be reported by tool's task manager.
 		traceManager.materialize(current);
-	}
-
-	private void configureEmulatorActivated(DebuggerPcodeEmulatorFactory factory) {
-		// TODO: Pull up config page. Tool Options? Program/Trace Options?
-		setEmulatorFactory(factory);
 	}
 
 	@Override
@@ -634,60 +640,39 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 		return task.future;
 	}
 
-	protected TraceSnapshot findScratch(Trace trace, TraceSchedule time) {
-		Collection<? extends TraceSnapshot> exist =
-			trace.getTimeManager().getSnapshotsWithSchedule(time);
-		if (!exist.isEmpty()) {
-			return exist.iterator().next();
-		}
-		/**
-		 * TODO: This could be more sophisticated.... Does it need to be, though? Ideally, we'd only
-		 * keep state around that has annotations, e.g., bookmarks and code units. That needs a new
-		 * query (latestStartSince) on those managers, though. It must find the latest start tick
-		 * since a given snap. We consider only start snaps because placed code units go "from now
-		 * on out".
-		 */
-		TraceSnapshot last = trace.getTimeManager().getMostRecentSnapshot(-1);
-		long snap = last == null ? Long.MIN_VALUE : last.getKey() + 1;
-		TraceSnapshot snapshot = trace.getTimeManager().getSnapshot(snap, true);
-		snapshot.setDescription("Emulated");
-		snapshot.setSchedule(time);
-		return snapshot;
-	}
-
 	protected void installBreakpoints(Trace trace, long snap, DebuggerPcodeMachine<?> emu) {
 		Lifespan span = Lifespan.at(snap);
 		TraceBreakpointManager bm = trace.getBreakpointManager();
 		for (AddressSpace as : trace.getBaseAddressFactory().getAddressSpaces()) {
-			for (TraceBreakpoint bpt : bm.getBreakpointsIntersecting(span,
+			for (TraceBreakpointLocation bpt : bm.getBreakpointsIntersecting(span,
 				new AddressRangeImpl(as.getMinAddress(), as.getMaxAddress()))) {
 				if (!bpt.isEmuEnabled(snap)) {
 					continue;
 				}
-				Set<TraceBreakpointKind> kinds = bpt.getKinds();
+				Set<TraceBreakpointKind> kinds = bpt.getKinds(snap);
 				boolean isExecute =
 					kinds.contains(TraceBreakpointKind.HW_EXECUTE) ||
 						kinds.contains(TraceBreakpointKind.SW_EXECUTE);
 				boolean isRead = kinds.contains(TraceBreakpointKind.READ);
 				boolean isWrite = kinds.contains(TraceBreakpointKind.WRITE);
 				if (isExecute) {
+					Address minAddress = bpt.getMinAddress(snap);
 					try {
-						emu.inject(bpt.getMinAddress(), bpt.getEmuSleigh());
+						emu.inject(minAddress, bpt.getEmuSleigh(snap));
 					}
 					catch (Exception e) { // This is a bit broad...
-						Msg.error(this,
-							"Error compiling breakpoint Sleigh at " + bpt.getMinAddress(), e);
-						emu.inject(bpt.getMinAddress(), "emu_injection_err();");
+						Msg.error(this, "Error compiling breakpoint Sleigh at " + minAddress, e);
+						emu.inject(minAddress, "emu_injection_err();");
 					}
 				}
 				if (isRead && isWrite) {
-					emu.addAccessBreakpoint(bpt.getRange(), AccessKind.RW);
+					emu.addAccessBreakpoint(bpt.getRange(snap), AccessKind.RW);
 				}
 				else if (isRead) {
-					emu.addAccessBreakpoint(bpt.getRange(), AccessKind.R);
+					emu.addAccessBreakpoint(bpt.getRange(snap), AccessKind.R);
 				}
 				else if (isWrite) {
-					emu.addAccessBreakpoint(bpt.getRange(), AccessKind.W);
+					emu.addAccessBreakpoint(bpt.getRange(snap), AccessKind.W);
 				}
 			}
 		}
@@ -753,7 +738,8 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 	protected TraceSnapshot writeToScratch(CacheKey key, CachedEmulator ce) {
 		TraceSnapshot destSnap;
 		try (Transaction tx = key.trace.openTransaction("Emulate")) {
-			destSnap = findScratch(key.trace, key.time);
+			destSnap = key.trace.getTimeManager().findScratchSnapshot(key.time);
+			destSnap.setDescription("Emulated");
 			try {
 				ce.emulator().writeDown(key.platform, destSnap.getKey(), key.time.getSnap());
 			}
@@ -817,14 +803,43 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 		}
 	}
 
+	class TraceMappingWaiter extends CompletableFuture<Void>
+			implements DebuggerStaticMappingChangeListener {
+		private final Trace trace;
+
+		public TraceMappingWaiter(Trace trace) {
+			this.trace = trace;
+		}
+
+		@Override
+		public void mappingsChanged(Set<Trace> affectedTraces, Set<Program> affectedPrograms) {
+			if (affectedTraces.contains(trace)) {
+				complete(null);
+			}
+		}
+
+		public void softWait() {
+			try {
+				get(1, TimeUnit.SECONDS);
+			}
+			catch (InterruptedException | ExecutionException | TimeoutException e) {
+				Msg.warn(this, "Mappings not reported by service after 1 second");
+			}
+		}
+	}
+
 	@Override
 	public Trace launchProgram(Program program, Address address) throws IOException {
 		Trace trace = null;
 		try {
 			trace = ProgramEmulationUtils.launchEmulationTrace(program, address, this);
+			trace.flushEvents();
+
+			TraceMappingWaiter waiter = new TraceMappingWaiter(trace);
+			staticMappings.addChangeListener(waiter);
 			traceManager.openTrace(trace);
 			traceManager.activateTrace(trace);
-			Swing.allowSwingToProcessEvents();
+			waiter.softWait();
 		}
 		finally {
 			if (trace != null) {

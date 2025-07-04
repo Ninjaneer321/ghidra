@@ -270,6 +270,8 @@ public class DWARFLine {
 		return lpe;
 	}
 
+	public record SourceFileInfo(String filePath, byte[] md5) {}
+
 	public record SourceFileAddr(long address, String fileName, byte[] md5, int lineNum,
 			boolean isEndSequence) {}
 
@@ -282,8 +284,13 @@ public class DWARFLine {
 				if (cu.getDWARFVersion() >= 5 && (row.file < cu.getLine().getNumFiles())) {
 					md5 = cu.getLine().getFile(row.file).getMD5();
 				}
-				results.add(new SourceFileAddr(row.address, getFilePath(row.file, true), md5,
-					row.line, row.isEndSequence));
+				String filePath = getFilePath(row.file, true);
+				if (filePath != null) {
+					results.add(new SourceFileAddr(row.address, filePath, md5, row.line,
+						row.isEndSequence));
+				} else {
+					cu.getProgram().getImportSummary().badSourceFileCount++;
+				}
 			}
 
 			return results;

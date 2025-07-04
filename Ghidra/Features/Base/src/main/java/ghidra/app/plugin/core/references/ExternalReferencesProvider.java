@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -49,7 +49,6 @@ import resources.Icons;
 
 /**
  * ComponentProvider that displays a table of External Programs.
- * <p>
  */
 public class ExternalReferencesProvider extends ComponentProviderAdapter {
 	private static Icon ADD_ICON = Icons.ADD_ICON;
@@ -213,7 +212,7 @@ public class ExternalReferencesProvider extends ComponentProviderAdapter {
 	private void deleteExternalProgram() {
 		ExternalManager externalManager = program.getExternalManager();
 		StringBuilder buf = new StringBuilder();
-		CompoundCmd cmd = new CompoundCmd("Delete External Program Name");
+		CompoundCmd<Program> cmd = new CompoundCmd<>("Delete External Program Name");
 		for (String externalName : getSelectedExternalNames()) {
 			boolean hasLocations = externalManager.getExternalLocations(externalName).hasNext();
 			if (hasLocations) {
@@ -252,7 +251,8 @@ public class ExternalReferencesProvider extends ComponentProviderAdapter {
 			ExternalManager externalManager = program.getExternalManager();
 			String externalLibraryPath = externalManager.getExternalLibraryPath(externalName);
 			if (!pathName.equals(externalLibraryPath)) {
-				Command cmd = new SetExternalNameCmd(externalName, domainFile.getPathname());
+				Command<Program> cmd =
+					new SetExternalNameCmd(externalName, domainFile.getPathname());
 				getTool().execute(cmd, program);
 			}
 		});
@@ -261,7 +261,7 @@ public class ExternalReferencesProvider extends ComponentProviderAdapter {
 	}
 
 	private void clearExternalAssociation() {
-		CompoundCmd cmd = new CompoundCmd("Clear External Program Associations");
+		CompoundCmd<Program> cmd = new CompoundCmd<>("Clear External Program Associations");
 		for (String externalName : getSelectedExternalNames()) {
 			cmd.add(new ClearExternalNameCmd(externalName));
 		}
@@ -436,7 +436,8 @@ public class ExternalReferencesProvider extends ComponentProviderAdapter {
 
 			rowToHighlightDuringNextReload = newName;
 			String oldName = path.getName();
-			Command cmd = new UpdateExternalNameCmd(oldName, newName, SourceType.USER_DEFINED);
+			Command<Program> cmd =
+				new UpdateExternalNameCmd(oldName, newName, SourceType.USER_DEFINED);
 			if (!tool.execute(cmd, program)) {
 				tool.setStatusInfo(cmd.getStatusMsg());
 			}

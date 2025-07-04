@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,6 +21,7 @@ import java.io.IOException;
 
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+import org.apache.commons.io.FilenameUtils;
 
 import ghidra.app.util.bin.ByteProvider;
 import ghidra.formats.gfilesystem.*;
@@ -34,7 +35,6 @@ import ghidra.util.task.TaskMonitor;
  * <p>
  * The factory supports detecting both compressed (gz) and uncompressed tar files,
  * and keys both on the tar filename extension as well as the data in the file.
- * <p>
  */
 @FileSystemInfo(type = "tar", description = "TAR", priority = FileSystemInfo.PRIORITY_HIGH, factory = TarFileSystemFactory.class)
 public class TarFileSystem extends AbstractFileSystem<TarMetadata> {
@@ -113,7 +113,7 @@ public class TarFileSystem extends AbstractFileSystem<TarMetadata> {
 		}
 		TarArchiveEntry blob = tmd.tarArchiveEntry;
 		return FileAttributes.of(
-			FileAttribute.create(NAME_ATTR, blob.getName()),
+			FileAttribute.create(NAME_ATTR, FilenameUtils.getName(blob.getName())),
 			FileAttribute.create(SIZE_ATTR, blob.getSize()),
 			FileAttribute.create(MODIFIED_DATE_ATTR, blob.getLastModifiedDate()),
 			FileAttribute.create(FILE_TYPE_ATTR, tarToFileType(blob)),
@@ -156,7 +156,7 @@ public class TarFileSystem extends AbstractFileSystem<TarMetadata> {
 
 				int fileNum = 0;
 				TarArchiveEntry tarEntry;
-				while ((tarEntry = tarInput.getNextTarEntry()) != null) {
+				while ((tarEntry = tarInput.getNextEntry()) != null) {
 					if (fileNum == tmd.fileNum) {
 						if (!tmd.tarArchiveEntry.getName().equals(tarEntry.getName())) {
 							throw new IOException(

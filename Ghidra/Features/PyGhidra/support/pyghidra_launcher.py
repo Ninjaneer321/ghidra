@@ -29,24 +29,49 @@ def get_application_properties(install_dir: Path) -> Dict[str, str]:
     with open(app_properties_path, 'r') as f:
         for line in f:
             line = line.strip()
-            if line.startswith('#') or line.startswith('!'):
+            if not line or line.startswith('#') or line.startswith('!'):
                 continue
             key, value = line.split('=', 1)
             if key:
                 props[key] = value
     return props
 
+def get_launch_properties(install_dir: Path, dev: bool) -> List[str]:
+    if dev:
+        launch_properties_path: Path = install_dir / 'Ghidra' / 'RuntimeScripts' / 'Common' / 'support' / 'launch.properties'
+    else:
+        launch_properties_path: Path = install_dir / 'support' / 'launch.properties'
+    props: List[str] = []
+    with open(launch_properties_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#') or line.startswith('!'):
+                continue
+            props.append(line)
+    return props
+
 def get_user_settings_dir(install_dir: Path, dev: bool) -> Path:
-    props: Dict[str, str] = get_application_properties(install_dir)
-    app_name: str = props['application.name'].replace(' ', '').lower()
-    app_version: str = props['application.version']
-    app_release_name: str = props['application.release.name']
+    app_props: Dict[str, str] = get_application_properties(install_dir)
+    app_name: str = app_props['application.name'].replace(' ', '').lower()
+    app_version: str = app_props['application.version']
+    app_release_name: str = app_props['application.release.name']
     versioned_name: str = f'{app_name}_{app_version}_{app_release_name}'
     if dev:
         versioned_name += f'_location_{install_dir.parent.name}'
+
+    # Check for application.settingsdir in launch.properties
+    for launch_prop in get_launch_properties(install_dir, dev):
+        if launch_prop.startswith('VMARGS=-Dapplication.settingsdir='):
+            application_settingsdir = launch_prop[launch_prop.rindex('=')+1:]
+            if application_settingsdir:
+                return Path(application_settingsdir) / app_name / versioned_name
+    
+    # Check for XDG_CONFIG_HOME environment variable
     xdg_config_home: str = os.environ.get('XDG_CONFIG_HOME')
     if xdg_config_home:
         return Path(xdg_config_home) / app_name / versioned_name
+    
+    # Default to platform-specific locations
     if platform.system() == 'Windows':
         return Path(os.environ['APPDATA']) / app_name / versioned_name
     if platform.system() == 'Darwin':
@@ -136,6 +161,8 @@ def get_saved_python_cmd(install_dir: Path, dev: bool) -> List[str]:
 
 def save_python_cmd(install_dir: Path, python_cmd: List[str], dev: bool) -> None:
     user_settings_dir: Path = get_user_settings_dir(install_dir, dev)
+    if not user_settings_dir.is_dir():
+        user_settings_dir.mkdir(parents=True, exist_ok=True)
     save_file: Path = user_settings_dir / 'python_command.save'
     with open(save_file, 'w') as f:
         f.write('\n'.join(python_cmd) + '\n')
@@ -185,8 +212,8 @@ def main() -> None:
     # Parse command line arguments
     parser = argparse.ArgumentParser(prog=Path(__file__).name)
     parser.add_argument('install_dir', metavar='<install dir>', help='Ghidra installation directory')
-    parser.add_argument('-c', '--console', action='store_true', help='Force console launch')
-    parser.add_argument('-d', '--dev', action='store_true', help='Ghidra development mode')
+    parser.add_argument('--console', action='store_true', help='Force console launch')
+    parser.add_argument('--dev', action='store_true', help='Ghidra development mode')
     parser.add_argument('-H', '--headless', action='store_true', help='Ghidra headless mode')
     args, remaining = parser.parse_known_args()
     
@@ -226,6 +253,7 @@ def main() -> None:
         offer_venv: bool = False
         if in_venv():
             # If we are already in a virtual environment, assume that's where the user wants to be
+            python_cmd = get_venv_exe(Path(sys.prefix))
             print(f'Using active virtual environment: {sys.prefix}')
         elif os.path.isdir(venv_dir):
             # If the Ghidra user settings venv exists, use that

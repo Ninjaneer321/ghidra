@@ -109,6 +109,22 @@ class _PyGhidraImportLoader:
     def exec_module(self, fullname):
         pass
 
+class _GhidraBundleFinder(importlib.machinery.PathFinder):
+    """ (internal) Used to find modules in Ghidra bundle locations """
+    
+    def find_spec(self, fullname, path=None, target=None):
+        from ghidra.framework import Application
+        from ghidra.app.script import GhidraScriptUtil
+        if Application.isInitialized():
+            GhidraScriptUtil.acquireBundleHostReference()
+            try:
+                for directory in GhidraScriptUtil.getEnabledScriptSourceDirectories():
+                    spec = super().find_spec(fullname, [directory.absolutePath], target)
+                    if spec is not None:
+                        return spec
+            finally:
+                GhidraScriptUtil.releaseBundleHostReference()
+        return None
 
 @contextlib.contextmanager
 def _plugin_lock():
@@ -136,6 +152,29 @@ def _plugin_lock():
             # it will be removed by said process when done
             pass
 
+def _lastrun() -> Path:
+
+    lastrun_file: Path = None
+    lastrun_rel: Path = Path('ghidra/lastrun')
+    
+    # Check for XDG_CONFIG_HOME environment variable
+    xdg_config_home: str = os.environ.get('XDG_CONFIG_HOME')
+    if xdg_config_home:
+        lastrun_file = Path(xdg_config_home) / lastrun_rel
+    else:
+        # Default to platform-specific locations
+        if platform.system() == 'Windows':
+            lastrun_file = Path(os.environ['APPDATA']) / lastrun_rel
+        elif platform.system() == 'Darwin':
+            lastrun_file = Path.home() / 'Library' / lastrun_rel
+        else:
+            lastrun_file = Path.home() / '.config' / lastrun_rel
+            
+    if lastrun_file is not None and lastrun_file.is_file():
+        with open(lastrun_file, "r") as file:
+            return Path(file.readline().strip())
+        
+    return None
 
 class PyGhidraLauncher:
     """
@@ -148,7 +187,7 @@ class PyGhidraLauncher:
 
         :param verbose: True to enable verbose output when starting Ghidra.
         :param install_dir: Ghidra installation directory.
-            (Defaults to the GHIDRA_INSTALL_DIR environment variable)
+            (Defaults to the GHIDRA_INSTALL_DIR environment variable or "lastrun" file)
         :raises ValueError: If the Ghidra installation directory is invalid.
         """
         self._layout = None
@@ -157,7 +196,7 @@ class PyGhidraLauncher:
         self._dev_mode = False
         self._extension_path = None
 
-        install_dir = install_dir or os.getenv("GHIDRA_INSTALL_DIR")
+        install_dir = install_dir or os.getenv("GHIDRA_INSTALL_DIR") or _lastrun()
         self._install_dir = self._validate_install_dir(install_dir)
 
         java_home_override = os.getenv("JAVA_HOME_OVERRIDE")
@@ -377,10 +416,6 @@ class PyGhidraLauncher:
 
         # set the JAVA_HOME environment variable to the correct one so jpype uses it
         os.environ['JAVA_HOME'] = str(self.java_home)
-        
-        # add bin dir to DLL search path to help address JPype 1.5.1 issue
-        if sys.platform == "win32":
-            os.add_dll_directory(str(self.java_home) + "/bin")
 
         jpype_kwargs['ignoreUnrecognized'] = True
 
@@ -394,8 +429,9 @@ class PyGhidraLauncher:
             **jpype_kwargs
         )
 
-        # Install hook into python importlib
+        # Install hooks into python importlib
         sys.meta_path.append(_PyGhidraImportLoader())
+        sys.meta_path.append(_GhidraBundleFinder())
 
         imports.registerDomain("ghidra")
 

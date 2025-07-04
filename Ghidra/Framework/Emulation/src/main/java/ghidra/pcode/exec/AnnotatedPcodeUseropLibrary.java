@@ -214,6 +214,7 @@ public abstract class AnnotatedPcodeUseropLibrary<T> implements PcodeUseropLibra
 		private final AnnotatedPcodeUseropLibrary<T> library;
 		private final boolean isFunctional;
 		private final boolean hasSideEffects;
+		private final boolean modifiesContext;
 		private final boolean canInline;
 		private final MethodHandle handle;
 
@@ -256,8 +257,9 @@ public abstract class AnnotatedPcodeUseropLibrary<T> implements PcodeUseropLibra
 			}
 			initFinished();
 			this.isFunctional = annot.functional();
-			this.canInline = annot.canInline();
 			this.hasSideEffects = annot.hasSideEffects();
+			this.modifiesContext = annot.modifiesContext();
+			this.canInline = annot.canInline();
 		}
 
 		@Override
@@ -310,6 +312,11 @@ public abstract class AnnotatedPcodeUseropLibrary<T> implements PcodeUseropLibra
 		@Override
 		public boolean hasSideEffects() {
 			return hasSideEffects;
+		}
+
+		@Override
+		public boolean modifiesContext() {
+			return modifiesContext;
 		}
 
 		@Override
@@ -437,7 +444,7 @@ public abstract class AnnotatedPcodeUseropLibrary<T> implements PcodeUseropLibra
 			public <T> Object convert(Varnode vn, PcodeExecutor<T> executor) {
 				PcodeExecutorStatePiece<T, T> state = executor.getState();
 				PcodeArithmetic<T> arithmetic = executor.getArithmetic();
-				return arithmetic.toBoolean(state.getVar(vn, executor.getReason()), Purpose.OTHER);
+				return arithmetic.isTrue(state.getVar(vn, executor.getReason()), Purpose.OTHER);
 			}
 		}
 
@@ -661,6 +668,17 @@ public abstract class AnnotatedPcodeUseropLibrary<T> implements PcodeUseropLibra
 		 * @see PcodeUseropLibrary.PcodeUseropDefinition#hasSideEffects()
 		 */
 		boolean hasSideEffects() default true;
+
+		/**
+		 * Set to true to indicate the userop can modify the decode context.
+		 * 
+		 * <p>
+		 * Failure to indicate context modifications can lead to erroneous decodes and thus
+		 * incorrect execution results.
+		 * 
+		 * @see PcodeUseropLibrary.PcodeUseropDefinition#modifiesContext()
+		 */
+		boolean modifiesContext() default false;
 
 		/**
 		 * Set to true to suggest inlining.
