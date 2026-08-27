@@ -106,13 +106,6 @@ public class GoToAddressLabelDialog extends ReusableDialogComponentProvider
 		this.navigatable = nav;
 		currentAddress = addr;
 		clearStatusText();
-		GoToOverrideService override = goToService.getOverrideService();
-		if (override != null) {
-			JComponent comp = override.getOverrideComponent();
-			if (comp != null) {
-				mainPanel.add(comp, BorderLayout.SOUTH);
-			}
-		}
 		setDialogEnabled(true);
 		tool.showDialog(this);
 	}
@@ -199,7 +192,7 @@ public class GoToAddressLabelDialog extends ReusableDialogComponentProvider
 
 		comboBox = new GhidraComboBox<>();
 		comboBox.setEditable(true);
-		comboBox.addActionListener(evt -> okCallback());
+
 		String comboName = "Go To Address or Label Text Field / Combobox";
 		comboBox.setName(comboName);
 		comboBox.getAccessibleContext().setAccessibleName(comboName);
@@ -243,9 +236,9 @@ public class GoToAddressLabelDialog extends ReusableDialogComponentProvider
 	private void readHistory(SaveState saveState) {
 		String[] strs = saveState.getStrings("GO_TO_HISTORY", null);
 		if (strs != null) {
-			for (int i = 0; i < strs.length; i++) {
-				if (!history.contains(strs[i])) {
-					history.add(strs[i]);
+			for (String str : strs) {
+				if (!history.contains(str)) {
+					history.add(str);
 				}
 			}
 			truncateHistoryAsNeeded();

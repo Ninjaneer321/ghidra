@@ -38,7 +38,6 @@ import ghidra.trace.database.ToyDBTraceBuilder;
 import ghidra.trace.database.listing.DBTraceCommentAdapter.DBTraceCommentEntry;
 import ghidra.trace.database.map.DBTraceAddressSnapRangePropertyMapTree.TraceAddressSnapRangeQuery;
 import ghidra.trace.database.memory.DBTraceMemorySpace;
-import ghidra.trace.database.symbol.DBTraceReference;
 import ghidra.trace.model.Lifespan;
 import ghidra.trace.model.guest.TraceGuestPlatform;
 import ghidra.trace.model.listing.TraceData;
@@ -52,7 +51,6 @@ import ghidra.trace.model.target.schema.XmlSchemaContext;
 import ghidra.trace.model.thread.TraceThread;
 import ghidra.trace.util.TraceRegisterUtils;
 import ghidra.util.*;
-import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.NoValueException;
 import ghidra.util.map.TypeMismatchException;
 
@@ -238,8 +236,8 @@ public class DBTraceCodeUnitTest extends AbstractGhidraHeadlessIntegrationTest {
 	}
 
 	@Test
-	public void testCodeUnitLocationGetters() throws CodeUnitInsertionException,
-			TraceOverlappedRegionException, DuplicateNameException {
+	public void testCodeUnitLocationGetters()
+			throws CodeUnitInsertionException, TraceOverlappedRegionException {
 		TraceInstruction ins;
 		try (Transaction tx = b.startTransaction()) {
 			ins = b.addInstruction(0, b.addr(0x4004), b.host, b.buf(0xf4, 0));
@@ -620,7 +618,7 @@ public class DBTraceCodeUnitTest extends AbstractGhidraHeadlessIntegrationTest {
 
 		assertEquals(Set.of(mnemRef, opRef, stackRef, regRef), set(i4004.getReferencesFrom()));
 
-		DBTraceReference refTo;
+		TraceReference refTo;
 		try (Transaction tx = b.startTransaction()) {
 			refTo = b.trace.getReferenceManager()
 					.addMemoryReference(Lifespan.ALL, b.addr(0x3000), b.addr(0x4004),
@@ -859,8 +857,8 @@ public class DBTraceCodeUnitTest extends AbstractGhidraHeadlessIntegrationTest {
 	}
 
 	@Test
-	public void testDataValueGetters() throws TraceOverlappedRegionException,
-			DuplicateNameException, CodeUnitInsertionException {
+	public void testDataValueGetters()
+			throws TraceOverlappedRegionException, CodeUnitInsertionException {
 		Union myUnion = new UnionDataType("myUnion");
 		myUnion.add(ShortDataType.dataType);
 
@@ -925,7 +923,7 @@ public class DBTraceCodeUnitTest extends AbstractGhidraHeadlessIntegrationTest {
 		assertNull(da4018.getValue());
 		assertNull(dd401c.getValue());
 
-		assertNull(u3fff.getValueClass());
+		assertEquals(Scalar.class, u3fff.getValueClass());
 		assertEquals(Scalar.class, dl4000.getValueClass());
 		assertEquals(Address.class, dp4006.getValueClass());
 		assertEquals(String.class, ds400e.getValueClass());
@@ -1001,8 +999,8 @@ public class DBTraceCodeUnitTest extends AbstractGhidraHeadlessIntegrationTest {
 	}
 
 	@Test
-	public void testInstructionOperandAndFlowSettersGetters() throws CodeUnitInsertionException,
-			TraceOverlappedRegionException, DuplicateNameException {
+	public void testInstructionOperandAndFlowSettersGetters()
+			throws CodeUnitInsertionException, TraceOverlappedRegionException {
 		Register r4 = b.language.getRegister("r4");
 		Register lr = b.language.getRegister("lr");
 		Register fC = b.language.getRegister("C");
@@ -1283,7 +1281,7 @@ public class DBTraceCodeUnitTest extends AbstractGhidraHeadlessIntegrationTest {
 
 	@Test
 	public void testToString() throws CodeUnitInsertionException, AddressOverflowException,
-			TraceOverlappedRegionException, DuplicateNameException {
+			TraceOverlappedRegionException {
 		Language x86 = getSLEIGH_X86_LANGUAGE();
 		TraceGuestPlatform guest;
 		TraceData d4000;
@@ -1630,7 +1628,7 @@ public class DBTraceCodeUnitTest extends AbstractGhidraHeadlessIntegrationTest {
 
 	@Test
 	public void testComponentGetters() throws CodeUnitInsertionException,
-			TraceOverlappedRegionException, DuplicateNameException, InvalidDataTypeException {
+			TraceOverlappedRegionException, InvalidDataTypeException {
 		Structure myStruct = new StructureDataType("myStruct", 0);
 		myStruct.add(ShortDataType.dataType);
 		myStruct.add(ShortDataType.dataType);
@@ -1689,41 +1687,41 @@ public class DBTraceCodeUnitTest extends AbstractGhidraHeadlessIntegrationTest {
 		assertEquals("tac", d400c.getComponent(2).getValue());
 		assertEquals("toe", d400c.getComponent(3).getValue());
 
-		assertNull(u3fff.getComponentAt(0));
-		assertNull(d4000.getComponentAt(0));
+		assertNull(u3fff.getComponentContaining(0));
+		assertNull(d4000.getComponentContaining(0));
 
-		assertNull(d4004.getComponentAt(-1));
-		assertEquals(d4004.getComponent(0), d4004.getComponentAt(0));
-		assertEquals(d4004.getComponent(0), d4004.getComponentAt(1));
-		assertEquals(d4004.getComponent(1), d4004.getComponentAt(2));
-		assertEquals(d4004.getComponent(1), d4004.getComponentAt(3));
-		assertEquals(d4004.getComponent(2), d4004.getComponentAt(4));
-		assertNull(d4004.getComponentAt(5));
+		assertNull(d4004.getComponentContaining(-1));
+		assertEquals(d4004.getComponent(0), d4004.getComponentContaining(0));
+		assertEquals(d4004.getComponent(0), d4004.getComponentContaining(1));
+		assertEquals(d4004.getComponent(1), d4004.getComponentContaining(2));
+		assertEquals(d4004.getComponent(1), d4004.getComponentContaining(3));
+		assertEquals(d4004.getComponent(2), d4004.getComponentContaining(4));
+		assertNull(d4004.getComponentContaining(5));
 
-		assertEquals(d400c.getComponent(0), d400c.getComponentAt(0));
-		assertEquals(d400c.getComponent(0), d400c.getComponentAt(1));
-		assertEquals(d400c.getComponent(1), d400c.getComponentAt(2));
-		assertEquals(d400c.getComponent(1), d400c.getComponentAt(3));
-		assertEquals(d400c.getComponent(1), d400c.getComponentAt(4));
-		assertEquals(d400c.getComponent(1), d400c.getComponentAt(5));
-		assertEquals(d400c.getComponent(2), d400c.getComponentAt(6));
-		assertEquals(d400c.getComponent(2), d400c.getComponentAt(7));
-		assertEquals(d400c.getComponent(2), d400c.getComponentAt(8));
-		assertEquals(d400c.getComponent(2), d400c.getComponentAt(9));
-		assertEquals(d400c.getComponent(3), d400c.getComponentAt(10));
-		assertEquals(d400c.getComponent(3), d400c.getComponentAt(11));
-		assertEquals(d400c.getComponent(3), d400c.getComponentAt(12));
-		assertEquals(d400c.getComponent(3), d400c.getComponentAt(13));
+		assertEquals(d400c.getComponent(0), d400c.getComponentContaining(0));
+		assertEquals(d400c.getComponent(0), d400c.getComponentContaining(1));
+		assertEquals(d400c.getComponent(1), d400c.getComponentContaining(2));
+		assertEquals(d400c.getComponent(1), d400c.getComponentContaining(3));
+		assertEquals(d400c.getComponent(1), d400c.getComponentContaining(4));
+		assertEquals(d400c.getComponent(1), d400c.getComponentContaining(5));
+		assertEquals(d400c.getComponent(2), d400c.getComponentContaining(6));
+		assertEquals(d400c.getComponent(2), d400c.getComponentContaining(7));
+		assertEquals(d400c.getComponent(2), d400c.getComponentContaining(8));
+		assertEquals(d400c.getComponent(2), d400c.getComponentContaining(9));
+		assertEquals(d400c.getComponent(3), d400c.getComponentContaining(10));
+		assertEquals(d400c.getComponent(3), d400c.getComponentContaining(11));
+		assertEquals(d400c.getComponent(3), d400c.getComponentContaining(12));
+		assertEquals(d400c.getComponent(3), d400c.getComponentContaining(13));
 
-		assertNull(d401c.getComponentAt(0));
-		assertNull(d401c.getComponentAt(1));
-		assertNull(d401c.getComponentAt(2));
-		assertNull(d401c.getComponentAt(3));
+		assertNull(d401c.getComponentContaining(0));
+		assertNull(d401c.getComponentContaining(1));
+		assertNull(d401c.getComponentContaining(2));
+		assertNull(d401c.getComponentContaining(3));
 
-		assertEquals(d4020.getComponent(0), d4020.getComponentAt(0));
-		assertEquals(d4020.getComponent(1), d4020.getComponentAt(1));
-		assertEquals(d4020.getComponent(2), d4020.getComponentAt(2));
-		assertEquals(d4020.getComponent(3), d4020.getComponentAt(3));
+		assertEquals(d4020.getComponent(0), d4020.getComponentContaining(0));
+		assertEquals(d4020.getComponent(1), d4020.getComponentContaining(1));
+		assertEquals(d4020.getComponent(2), d4020.getComponentContaining(2));
+		assertEquals(d4020.getComponent(3), d4020.getComponentContaining(3));
 
 		assertNull(u3fff.getComponentsContaining(-1));
 		assertTrue(u3fff.getComponentsContaining(0).isEmpty());

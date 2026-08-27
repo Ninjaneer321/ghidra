@@ -20,10 +20,12 @@ import java.math.BigInteger;
 import java.util.*;
 
 import ghidra.app.util.MemoryBlockUtils;
-import ghidra.app.util.Option;
 import ghidra.app.util.bin.BinaryReader;
 import ghidra.app.util.bin.ByteProvider;
 import ghidra.app.util.bin.format.mz.*;
+import ghidra.app.util.bin.format.ne.NewExecutable;
+import ghidra.app.util.bin.format.pe.PortableExecutable;
+import ghidra.app.util.bin.format.pe.PortableExecutable.SectionLayout;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.program.database.mem.FileBytes;
 import ghidra.program.database.module.TreeManager;
@@ -66,7 +68,7 @@ public class MzLoader extends AbstractLibrarySupportLoader {
 		}
 		MzExecutable mz = new MzExecutable(provider);
 		OldDOSHeader header = mz.getHeader();
-		if (header.isDosSignature() && !header.hasNewExeHeader() && !header.hasPeHeader()) {
+		if (header.isDosSignature() && !isPeOrNe(provider)) {
 			List<QueryResult> results =
 				QueryOpinionService.query(getName(), "" + header.e_magic(), null);
 			for (QueryResult result : results) {
@@ -81,18 +83,21 @@ public class MzLoader extends AbstractLibrarySupportLoader {
 	}
 
 	@Override
-	public void load(ByteProvider provider, LoadSpec loadSpec, List<Option> options,
-			Program program, TaskMonitor monitor, MessageLog log)
+	public void load(Program program, ImporterSettings settings)
 			throws IOException, CancelledException {
 
-		FileBytes fileBytes = MemoryBlockUtils.createFileBytes(program, provider, monitor);
+		MessageLog log = settings.log();
+		TaskMonitor monitor = settings.monitor();
+
+		FileBytes fileBytes =
+			MemoryBlockUtils.createFileBytes(program, settings.provider(), monitor);
 		AddressFactory af = program.getAddressFactory();
 		if (!(af.getDefaultAddressSpace() instanceof SegmentedAddressSpace)) {
 			throw new IOException("Selected Language must have a segmented address space.");
 		}
 
 		SegmentedAddressSpace space = (SegmentedAddressSpace) af.getDefaultAddressSpace();
-		MzExecutable mz = new MzExecutable(provider);
+		MzExecutable mz = new MzExecutable(settings.provider());
 
 		try {
 			Set<RelocationFixup> relocationFixups = getRelocationFixups(space, mz, log, monitor);
@@ -123,6 +128,28 @@ public class MzLoader extends AbstractLibrarySupportLoader {
 	@Override
 	public int getTierPriority() {
 		return 60; // we are less priority than PE!  Important for ProgramLoader
+	}
+
+	/**
+	 * {@return true if the given {@link ByteProvider} contains a PE or NE binary}
+	 * 
+	 * @param provider The {@link ByteProvider} to check
+	 */
+	private boolean isPeOrNe(ByteProvider provider) {
+		try {
+			new PortableExecutable(provider, SectionLayout.FILE, false, false);
+			return true;
+		}
+		catch (IOException e) {
+			try {
+				new NewExecutable(provider, null);
+				return true;
+			}
+			catch (IOException e2) {
+				// fall through
+			}
+		}
+		return false;
 	}
 
 	/**

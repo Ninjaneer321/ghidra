@@ -24,6 +24,7 @@ import generic.stl.Pair;
 import ghidra.app.util.Option;
 import ghidra.app.util.bin.*;
 import ghidra.app.util.opinion.*;
+import ghidra.app.util.opinion.Loader.ImporterSettings;
 import ghidra.formats.gfilesystem.FSRL;
 import ghidra.formats.gfilesystem.FileSystemService;
 import ghidra.framework.model.*;
@@ -32,18 +33,19 @@ import ghidra.program.model.lang.*;
 import ghidra.program.model.listing.Program;
 import ghidra.program.util.DefaultLanguageService;
 import ghidra.util.Msg;
-import ghidra.util.exception.CancelledException;
-import ghidra.util.exception.VersionException;
+import ghidra.util.exception.*;
 import ghidra.util.task.TaskMonitor;
 
 /**
- * Used to load (import) a new {@link Program}
+ * Used to load (import) a new {@link Program} or other {@link DomainObject}.
  */
 public class ProgramLoader {
 
 	/**
 	 * Gets a new {@link ProgramLoader} {@link Builder} which can be used to load a new 
-	 * {@link Program}
+	 * {@link Program}.  This builder may optionally support loading of other {@link DomainObject}
+	 * implementations through the use of the {@link Builder#loadAll()} method in place of the
+	 * Program-specific load methods. 
 	 * 
 	 * @return A new {@link ProgramLoader} {@link Builder} which can be used to load a new 
 	 *   {@link Program}
@@ -63,6 +65,7 @@ public class ProgramLoader {
 		private byte[] bytes;
 		private Project project;
 		private String projectFolderPath;
+		private boolean mirror;
 		private String importNameOverride;
 		private Predicate<Loader> loaderFilter = LoaderService.ACCEPT_ALL;
 		private List<Pair<String, String>> loaderArgs = new ArrayList<>();
@@ -133,6 +136,8 @@ public class ProgramLoader {
 		/**
 		 * Sets the required import source to the given bytes
 		 * <p>
+		 * NOTE: {@link #load()} will fail if a {@link #name(String)} is not set
+		 * <p>
 		 * NOTE: Any previously defined sources will be overwritten
 		 * 
 		 * @param b The bytes to import. A {@code null} value will unset the source.
@@ -144,6 +149,18 @@ public class ProgramLoader {
 			this.file = null;
 			this.bytes = b;
 			return this;
+		}
+
+		/**
+		 * Sets the required import source to the given filesystem path
+		 * <p>
+		 * NOTE: Any previously defined sources will be overwritten
+		 * 
+		 * @param path The filesystem path to import. A {@code null} value will unset the source.
+		 * @return This {@link Builder}
+		 */
+		public Builder source(String path) {
+			return source(new File(path));
 		}
 
 		/**
@@ -162,19 +179,31 @@ public class ProgramLoader {
 		}
 
 		/**
-		 * Sets the suggested project folder path for the {@link Loaded} {@link Program}s. This is 
-		 * just a suggestion, and a {@link Loader} implementation reserves the right to change it 
-		 * for each {@link Loaded} result. The {@link Loaded} results should be queried for their 
-		 * true project folder paths using {@link Loaded#getProjectFolderPath()}.
+		 * Sets the project folder path to load into.
 		 * <p>
 		 * The default project folder path is the root of the project ({@code "/"}).
 		 * 
-		 * @param path The suggested project folder path. A {@code null} value will revert the path
-		 *   back to the default value of ({@code "/"}).
+		 * @param path The project folder path. A {@code null} value will revert the path back to 
+		 *   the default value of ({@code "/"}).
 		 * @return This {@link Builder}
 		 */
 		public Builder projectFolderPath(String path) {
 			this.projectFolderPath = path;
+			return this;
+		}
+
+		/**
+		 * Sets whether or not the absolute filesystem path of each {@link Loaded} {@link Program}
+		 * should be mirrored in the project, rooted at the specified
+		 * {@link #projectFolderPath(String) project folder path}.
+		 * <p>
+		 * By default, mirroring is off.
+		 * 
+		 * @param shouldMirror True if filesystem mirroring should happen; otherwise, false.
+		 * @return This {@link Builder}
+		 */
+		public Builder mirror(boolean shouldMirror) {
+			this.mirror = shouldMirror;
 			return this;
 		}
 
@@ -219,6 +248,25 @@ public class ProgramLoader {
 			this.loaderFilter =
 				cls != null ? loader -> loader.getClass().equals(cls) : LoaderService.ACCEPT_ALL;
 			return this;
+		}
+
+		/**
+		 * Sets the acceptable {@link Loader} to use during import.
+		 * <p>
+		 * By default, all {@link Loader}s are accepted ({@link LoaderService#ACCEPT_ALL}).
+		 * 
+		 * @param clsName The class name of the {@link Loader} to use during import. A {@code null}
+		 *   value will revert back to the default ({@link LoaderService#ACCEPT_ALL}).
+		 * @return This {@link Builder}
+		 * @throws InvalidInputException if the given loader class name did not correspond to a
+		 *   {@link Loader}
+		 */
+		public Builder loaders(String clsName) throws InvalidInputException {
+			Class<? extends Loader> cls = LoaderService.getLoaderClassByName(clsName);
+			if (cls == null) {
+				throw new InvalidInputException("Loader '%s' does not exist!".formatted(clsName));
+			}
+			return loaders(cls);
 		}
 	
 		/**
@@ -346,7 +394,7 @@ public class ProgramLoader {
 			this.compilerSpecId = cspec != null ? cspec.getCompilerSpecID() : null;
 			return this;
 		}
-		
+
 		/**
 		 * Sets the {@link MessageLog log} to use during import.
 		 * <p>
@@ -415,15 +463,93 @@ public class ProgramLoader {
 		 * @deprecated Use {@link #load()} instead
 		 */
 		@SuppressWarnings("unchecked")
-		@Deprecated(since = "11.5", forRemoval = true)
+		@Deprecated(since = "12.0", forRemoval = true)
 		LoadResults<Program> load(Object consumer) throws IOException, LanguageNotFoundException,
 				CancelledException, VersionException, LoadException {
+
+			LoadResults<? extends DomainObject> loadResults = loadAll(consumer);
+
+			// Filter out and release non-Programs
+			List<Loaded<Program>> loadedPrograms = new ArrayList<>();
+			for (Loaded<? extends DomainObject> loaded : loadResults) {
+				if (Program.class.isAssignableFrom(loaded.getDomainObjectType())) {
+					loadedPrograms.add((Loaded<Program>) loaded);
+				}
+				else {
+					try {
+						loaded.close();
+					}
+					catch (Exception e) {
+						throw new IOException(e);
+					}
+				}
+			}
+			if (loadedPrograms.isEmpty()) {
+				throw new LoadException("Domain objects were loaded, but none were Programs");
+			}
+			return new LoadResults<>(loadedPrograms);
+		}
+
+		/**
+		 * Loads the specified {@link #source(ByteProvider) source} with this {@link Builder}'s 
+		 * current configuration.  This method is intended to handle various {@link DomainObject}
+		 * implementations unlike the other Program specific load methods.  Care must be taken to
+		 * check the specific implementation class before casting.
+		 * 
+		 * @return The {@link LoadResults} which contains one or more {@link Loaded} 
+		 *   {@link DomainObject}s (created but not saved)
+		 * @throws IOException if there was an IO-related problem loading
+		 * @throws LanguageNotFoundException if there was a problem getting the language		
+		 * @throws CancelledException if the operation was cancelled 
+		 * @throws VersionException if there was an issue with database versions, probably due to a 
+		 *   failed language upgrade
+		 * @throws LoadException if there was a problem loading
+		 */
+		public LoadResults<? extends DomainObject> loadAll() throws IOException,
+				LanguageNotFoundException, CancelledException, VersionException, LoadException {
+			return loadAll(this);
+		}
+
+		/**
+		 * Loads the specified {@link #source(ByteProvider) source} with this {@link Builder}'s 
+		 * current configuration.  This method is intended to handle various {@link DomainObject}
+		 * implementations unlike the other Program specific load methods.  Care must be taken to
+		 * check the specific implementation class before casting.
+		 * 
+		 * @param consumer A reference to the object "consuming" the returned {@link LoadResults}, 
+		 *   used to ensure the underlying {@link DomainObject}s are only closed when every consumer
+		 *   is done with it (see {@link LoadResults#close()}).
+		 * @return The {@link LoadResults} which contains one or more {@link Loaded} 
+		 *   {@link DomainObject}s (created but not saved)
+		 * @throws IOException if there was an IO-related problem loading
+		 * @throws LanguageNotFoundException if there was a problem getting the language		
+		 * @throws CancelledException if the operation was cancelled 
+		 * @throws VersionException if there was an issue with database versions, probably due to a 
+		 *   failed language upgrade
+		 * @throws LoadException if there was a problem loading
+		 */
+		@Deprecated(since = "12.1", forRemoval = true)
+		public LoadResults<? extends DomainObject> loadAll(Object consumer) throws IOException,
+				LanguageNotFoundException, CancelledException, VersionException, LoadException {
 			try (ByteProvider p = getSourceAsProvider()) {
 
 				LoadSpec loadSpec = getLoadSpec(p);
 				List<Option> loaderOptions = getLoaderOptions(p, loadSpec);
-				String importName = Objects.requireNonNullElse(importNameOverride,
-					loadSpec.getLoader().getPreferredFileName(p));
+				String importName;
+				if (mirror) {
+					if (importNameOverride != null) {
+						throw new LoadException("Cannot override import name if mirroring");
+					}
+					FSRL f = p.getFSRL();
+					if (f == null) {
+						throw new LoadException("Mirroring requires a file-based source");
+					}
+					importName = f.getPath();
+				}
+				else {
+					importName = importNameOverride != null ? importNameOverride
+							: loadSpec.getLoader().getPreferredFileName(p);
+				}
 
 				// Load
 				Msg.info(ProgramLoader.class, "Using Loader: " + loadSpec.getLoader().getName());
@@ -431,34 +557,18 @@ public class ProgramLoader {
 					"Using Language/Compiler: " + loadSpec.getLanguageCompilerSpec());
 				Msg.info(ProgramLoader.class, "Using Library Search Path: " +
 					Arrays.toString(LibrarySearchPathManager.getLibraryPaths()));
-				LoadResults<? extends DomainObject> loadResults = loadSpec.getLoader()
-						.load(p, importName, project, projectFolderPath, loadSpec, loaderOptions,
-							log, Objects.requireNonNullElse(consumer, this), monitor);
+				ImporterSettings settings = new ImporterSettings(p, importName, project,
+					projectFolderPath, mirror, loadSpec, loaderOptions,
+					Objects.requireNonNullElse(consumer, this), log, monitor);
+				LoadResults<? extends DomainObject> loadResults =
+					loadSpec.getLoader().load(settings);
 
 				// Optionally echo loader message log to application.log
 				if (!Loader.loggingDisabled && log.hasMessages()) {
 					Msg.info(ProgramLoader.class, "Additional info:\n" + log);
 				}
 
-				// Filter out and release non-Programs
-				List<Loaded<Program>> loadedPrograms = new ArrayList<>();
-				for (Loaded<? extends DomainObject> loaded : loadResults) {
-					if (Program.class.isAssignableFrom(loaded.getDomainObjectType())) {
-						loadedPrograms.add((Loaded<Program>) loaded);
-					}
-					else {
-						try {
-							loaded.close();
-						}
-						catch (Exception e) {
-							throw new IOException(e);
-						}
-					}
-				}
-				if (loadedPrograms.isEmpty()) {
-					throw new LoadException("Domain objects were loaded, but none were Programs");
-				}
-				return new LoadResults<>(loadedPrograms);
+				return loadResults;
 			}
 		}
 
@@ -489,6 +599,10 @@ public class ProgramLoader {
 				p = fsService.getByteProvider(fsService.getLocalFSRL(file), true, monitor);
 			}
 			else if (bytes != null) {
+				if (importNameOverride == null) {
+					throw new LoadException(
+						"Byte source does not have a name (was name() called?)");
+				}
 				p = new ByteArrayProvider(bytes);
 			}
 			else {
@@ -507,7 +621,7 @@ public class ProgramLoader {
 		 */
 		private LoadSpec getLoadSpec(ByteProvider p)
 				throws LanguageNotFoundException, LoadException {
-			LoaderMap loaderMap = LoaderService.getSupportedLoadSpecs(p, loaderFilter);
+			LoaderMap loaderMap = LoaderService.getSupportedLoadSpecs(p, loaderFilter, monitor);
 			LoadSpecChooser loadSpecChooser =
 				languageId != null ? new LcsHintLoadSpecChooser(languageId, compilerSpecId)
 						: (compilerSpecId != null ? new CsHintLoadSpecChooser(compilerSpecId)
@@ -532,7 +646,8 @@ public class ProgramLoader {
 		 */
 		private List<Option> getLoaderOptions(ByteProvider p, LoadSpec loadSpec)
 				throws LanguageNotFoundException, LoadException {
-			List<Option> options = loadSpec.getLoader().getDefaultOptions(p, loadSpec, null, false);
+			List<Option> options =
+				loadSpec.getLoader().getDefaultOptions(p, loadSpec, null, false, mirror);
 			if (options == null) {
 				throw new LoadException("Cannot load with null options");
 			}

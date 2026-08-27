@@ -71,6 +71,7 @@ public abstract class CompositeEditorProvider<T extends Composite, M extends Com
 		setTransient();
 		listeners = WeakDataStructureFactory.createSingleThreadAccessWeakSet();
 		initializeServices();
+
 	}
 
 	protected String getProviderSubTitle(DataType dataType) {
@@ -388,4 +389,5 @@ public abstract class CompositeEditorProvider<T extends Composite, M extends Com
 	protected void closeDependentEditors() {
 		// do nothing by default
 	}
+
 }

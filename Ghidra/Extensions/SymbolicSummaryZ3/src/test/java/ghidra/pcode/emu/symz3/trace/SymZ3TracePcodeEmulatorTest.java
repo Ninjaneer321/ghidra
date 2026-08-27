@@ -18,6 +18,7 @@ package ghidra.pcode.emu.symz3.trace;
 import java.util.List;
 
 import org.apache.commons.lang3.tuple.Pair;
+import org.junit.Before;
 import org.junit.Test;
 
 import com.microsoft.z3.BitVecExpr;
@@ -25,20 +26,42 @@ import com.microsoft.z3.Context;
 
 import db.Transaction;
 import ghidra.pcode.emu.PcodeThread;
+import ghidra.pcode.emu.symz3.SymZ3EmulatorFactory;
+import ghidra.pcode.emu.symz3.SymZ3TestUtils;
+import ghidra.pcode.emu.symz3.state.SymZ3PcodeEmulator;
+import ghidra.pcode.emu.symz3.state.SymZ3PieceHandler;
 import ghidra.pcode.exec.PcodeExecutorStatePiece.Reason;
 import ghidra.pcode.exec.trace.AbstractTracePcodeEmulatorTest;
+import ghidra.pcode.exec.trace.TraceEmulationIntegration.Writer;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.lang.Register;
 import ghidra.symz3.model.SymValueZ3;
 import ghidra.trace.database.ToyDBTraceBuilder;
 import ghidra.trace.model.Lifespan;
+import ghidra.trace.model.guest.TracePlatform;
 import ghidra.trace.model.property.TracePropertyMap;
 import ghidra.trace.model.property.TracePropertyMapSpace;
 import ghidra.trace.model.thread.TraceThread;
 import ghidra.util.Msg;
 
 public class SymZ3TracePcodeEmulatorTest extends AbstractTracePcodeEmulatorTest {
+
+	@Override
+	protected Writer createWriter(TracePlatform platform, long snap) {
+		Writer writer = super.createWriter(platform, snap);
+		SymZ3EmulatorFactory.addHandlers(writer);
+		return writer;
+	}
+
+	SymZ3PcodeEmulator createEmulator(TracePlatform platform, Writer writer) {
+		return new SymZ3PcodeEmulator(platform.getLanguage(), writer.callbacks());
+	}
+
+	@Before
+	public void setUpSymTest() throws Throwable {
+		SymZ3TestUtils.skipTestIfUnsupportedPlatform();
+	}
 
 	/**
 	 * Test that state is properly read from trace memory
@@ -55,8 +78,7 @@ public class SymZ3TracePcodeEmulatorTest extends AbstractTracePcodeEmulatorTest 
 
 			try (Transaction tid = tb.startTransaction()) {
 				TracePropertyMap<String> symMap = tb.trace.getAddressPropertyManager()
-						.getOrCreatePropertyMap(SymZ3TracePcodeExecutorStatePiece.NAME,
-							String.class);
+						.getOrCreatePropertyMap(SymZ3PieceHandler.NAME, String.class);
 
 				try (Context ctx = new Context()) {
 					SymValueZ3 test = new SymValueZ3(ctx, ctx.mkBV(0, 8));
@@ -65,7 +87,8 @@ public class SymZ3TracePcodeEmulatorTest extends AbstractTracePcodeEmulatorTest 
 				}
 			}
 
-			SymZ3TracePcodeEmulator emu = new SymZ3TracePcodeEmulator(tb.host, 0);
+			Writer writer = createWriter(tb.host, 0);
+			SymZ3PcodeEmulator emu = createEmulator(tb.host, writer);
 			PcodeThread<Pair<byte[], SymValueZ3>> emuThread = emu.newThread(thread.getPath());
 			emuThread.getExecutor().executeSleigh("RAX = *0x00400000:8;");
 
@@ -92,14 +115,14 @@ public class SymZ3TracePcodeEmulatorTest extends AbstractTracePcodeEmulatorTest 
 
 			try (Transaction tid = tb.startTransaction()) {
 				TracePropertyMap<String> symZ3Map = tb.trace.getAddressPropertyManager()
-						.getOrCreatePropertyMap(SymZ3TracePcodeExecutorStatePiece.NAME,
-							String.class);
+						.getOrCreatePropertyMap(SymZ3PieceHandler.NAME, String.class);
 				TracePropertyMapSpace<String> mapSpace =
 					symZ3Map.getPropertyMapRegisterSpace(thread, 0, true);
 				mapSpace.set(Lifespan.nowOn(0), regRBX, "test_0");
 			}
 
-			SymZ3TracePcodeEmulator emu = new SymZ3TracePcodeEmulator(tb.host, 0);
+			Writer writer = createWriter(tb.host, 0);
+			SymZ3PcodeEmulator emu = createEmulator(tb.host, writer);
 			PcodeThread<Pair<byte[], SymValueZ3>> emuThread = emu.newThread(thread.getPath());
 
 			try (Context ctx = new Context()) {
@@ -128,7 +151,8 @@ public class SymZ3TracePcodeEmulatorTest extends AbstractTracePcodeEmulatorTest 
 	public void testWriteStateMemory() throws Throwable {
 		try (ToyDBTraceBuilder tb = new ToyDBTraceBuilder("Test", "x86:LE:64:default")) {
 			initTrace(tb, "", List.of());
-			SymZ3TracePcodeEmulator emu = new SymZ3TracePcodeEmulator(tb.host, 0);
+			Writer writer = createWriter(tb.host, 0);
+			SymZ3PcodeEmulator emu = createEmulator(tb.host, writer);
 
 			Address addr = tb.addr(0x00400000);
 			try (Context ctx = new Context()) {
@@ -142,11 +166,11 @@ public class SymZ3TracePcodeEmulatorTest extends AbstractTracePcodeEmulatorTest 
 			}
 
 			try (Transaction tid = tb.startTransaction()) {
-				emu.writeDown(tb.host, 1, 0);
+				writer.writeDown(1);
 			}
 			TracePropertyMap<String> map =
 				tb.trace.getAddressPropertyManager()
-						.getPropertyMap(SymZ3TracePcodeExecutorStatePiece.NAME, String.class);
+						.getPropertyMap(SymZ3PieceHandler.NAME, String.class);
 
 			TracePropertyMapSpace<String> backing =
 				map.getPropertyMapSpace(addr.getAddressSpace(), false);
@@ -168,7 +192,8 @@ public class SymZ3TracePcodeEmulatorTest extends AbstractTracePcodeEmulatorTest 
 
 			TraceThread thread = initTrace(tb, "", List.of());
 
-			SymZ3TracePcodeEmulator emu = new SymZ3TracePcodeEmulator(tb.host, 0);
+			Writer writer = createWriter(tb.host, 0);
+			SymZ3PcodeEmulator emu = createEmulator(tb.host, writer);
 			PcodeThread<Pair<byte[], SymValueZ3>> emuThread = emu.newThread(thread.getPath());
 
 			try (Context ctx = new Context()) {
@@ -178,13 +203,13 @@ public class SymZ3TracePcodeEmulatorTest extends AbstractTracePcodeEmulatorTest 
 			}
 
 			try (Transaction tid = tb.startTransaction()) {
-				emu.writeDown(tb.host, 1, 0);
+				writer.writeDown(1);
 
 				// grab the name property from the abstract class.... 
 
 				TracePropertyMap<String> symMap =
 					tb.trace.getAddressPropertyManager()
-							.getPropertyMap(SymZ3TracePcodeExecutorStatePiece.NAME, String.class);
+							.getPropertyMap(SymZ3PieceHandler.NAME, String.class);
 
 				Msg.info(this, "we have a symMap: " + symMap);
 
@@ -216,16 +241,17 @@ public class SymZ3TracePcodeEmulatorTest extends AbstractTracePcodeEmulatorTest 
 					"MOV qword ptr [RBP + -0x28],RAX",
 					"MOV RBP, qword ptr [RBP + -0x28]"));
 
-			SymZ3TracePcodeEmulator emu = new SymZ3TracePcodeEmulator(tb.host, 0);
+			Writer writer = createWriter(tb.host, 0);
+			SymZ3PcodeEmulator emu = createEmulator(tb.host, writer);
 			PcodeThread<Pair<byte[], SymValueZ3>> emuThread = emu.newThread(thread.getPath());
 
 			emuThread.stepInstruction();
 			try (Transaction tid = tb.startTransaction()) {
-				emu.writeDown(tb.host, 1, 0);
+				writer.writeDown(1);
 			}
 			emuThread.stepInstruction();
 			try (Transaction tid = tb.startTransaction()) {
-				emu.writeDown(tb.host, 2, 0);
+				writer.writeDown(2);
 			}
 			emuThread.stepInstruction();
 			emuThread.stepInstruction();
@@ -239,12 +265,12 @@ public class SymZ3TracePcodeEmulatorTest extends AbstractTracePcodeEmulatorTest 
 			emu.printSymbolicSummary(System.out);
 
 			try (Transaction tid = tb.startTransaction()) {
-				emu.writeDown(tb.host, 5, 0);
+				writer.writeDown(5);
 			}
 
 			TracePropertyMap<String> symMap =
 				tb.trace.getAddressPropertyManager()
-						.getPropertyMap(SymZ3TracePcodeExecutorStatePiece.NAME, String.class);
+						.getPropertyMap(SymZ3PieceHandler.NAME, String.class);
 
 			TracePropertyMapSpace<String> backing = symMap.getPropertyMapSpace(ram, false);
 
@@ -263,27 +289,28 @@ public class SymZ3TracePcodeEmulatorTest extends AbstractTracePcodeEmulatorTest 
 					"MOV dword ptr [RBP + -0x18],EAX",
 					"MOVZX EAX, byte ptr [RBP + -0x28]"));
 
-			SymZ3TracePcodeEmulator emu = new SymZ3TracePcodeEmulator(tb.host, 0);
+			Writer writer = createWriter(tb.host, 0);
+			SymZ3PcodeEmulator emu = createEmulator(tb.host, writer);
 			PcodeThread<Pair<byte[], SymValueZ3>> emuThread = emu.newThread(thread.getPath());
 
 			emuThread.stepInstruction();
 			try (Transaction tid = tb.startTransaction()) {
-				emu.writeDown(tb.host, 1, 0);
+				writer.writeDown(1);
 			}
 			emuThread.stepInstruction();
 			try (Transaction tid = tb.startTransaction()) {
-				emu.writeDown(tb.host, 2, 0);
+				writer.writeDown(2);
 			}
 
 			emu.printSymbolicSummary(System.out);
 
 			try (Transaction tid = tb.startTransaction()) {
-				emu.writeDown(tb.host, 5, 0);
+				writer.writeDown(5);
 			}
 
 			TracePropertyMap<String> symMap =
 				tb.trace.getAddressPropertyManager()
-						.getPropertyMap(SymZ3TracePcodeExecutorStatePiece.NAME, String.class);
+						.getPropertyMap(SymZ3PieceHandler.NAME, String.class);
 
 			AddressSpace noSpace = Address.NO_ADDRESS.getAddressSpace();
 			TracePropertyMapSpace<String> backing = symMap.getPropertyMapSpace(noSpace, false);

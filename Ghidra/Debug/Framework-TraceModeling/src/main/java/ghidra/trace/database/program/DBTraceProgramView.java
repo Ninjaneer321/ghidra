@@ -58,6 +58,7 @@ import ghidra.trace.model.data.TraceBasedDataTypeManager;
 import ghidra.trace.model.listing.*;
 import ghidra.trace.model.memory.TraceMemoryRegion;
 import ghidra.trace.model.memory.TraceMemoryState;
+import ghidra.trace.model.memory.TraceMemoryOperations.StatePredicate;
 import ghidra.trace.model.program.TraceProgramView;
 import ghidra.trace.model.symbol.*;
 import ghidra.trace.util.TraceEvents;
@@ -114,10 +115,6 @@ public class DBTraceProgramView implements TraceProgramView {
 			listenFor(TraceEvents.POST_COMMENT_CHANGED, this::commentPostChanged);
 			listenFor(TraceEvents.PRE_COMMENT_CHANGED, this::commentPreChanged);
 			listenFor(TraceEvents.REPEATABLE_COMMENT_CHANGED, this::commentRepeatableChanged);
-
-			listenFor(TraceEvents.COMPOSITE_DATA_ADDED, this::compositeDataAdded);
-			listenFor(TraceEvents.COMPOSITE_DATA_LIFESPAN_CHANGED, this::compositeLifespanChanged);
-			listenFor(TraceEvents.COMPOSITE_DATA_REMOVED, this::compositeDataRemoved);
 
 			listenFor(TraceEvents.DATA_TYPE_ADDED, this::dataTypeAdded);
 			listenFor(TraceEvents.DATA_TYPE_CHANGED, this::dataTypeChanged);
@@ -322,8 +319,7 @@ public class DBTraceProgramView implements TraceProgramView {
 				range.getX2(), null, null, null));
 		}
 
-		private void codeDataTypeSettingsChanged(AddressSpace space,
-				TraceAddressSnapRange range) {
+		private void codeDataTypeSettingsChanged(AddressSpace space, TraceAddressSnapRange range) {
 			DomainObjectEventQueues queues = isVisible(space, range);
 			if (queues == null) {
 				return;
@@ -367,45 +363,6 @@ public class DBTraceProgramView implements TraceProgramView {
 				String oldValue, String newValue) {
 			// TODO: The "repeatable" semantics are not implemented, yet.
 			commentChanged(CommentType.REPEATABLE, space, range, oldValue, newValue);
-		}
-
-		private void compositeDataAdded(AddressSpace space, TraceAddressSnapRange range,
-				TraceData oldIsNull, TraceData added) {
-			DomainObjectEventQueues queues = isCodeVisible(space, added);
-			if (queues == null) {
-				return;
-			}
-			queues.fireEvent(new ProgramChangeRecord(ProgramEvent.COMPOSITE_ADDED,
-				added.getMinAddress(), added.getMaxAddress(), null, null, added));
-		}
-
-		private void compositeLifespanChanged(AddressSpace space, TraceData data, Lifespan oldSpan,
-				Lifespan newSpan) {
-			DomainObjectEventQueues queues = getEventQueues(space);
-			if (queues == null) {
-				return;
-			}
-			boolean inOld = isCodeVisible(data, oldSpan);
-			boolean inNew = isCodeVisible(data, newSpan);
-			if (inOld && !inNew) {
-				queues.fireEvent(new ProgramChangeRecord(ProgramEvent.COMPOSITE_REMOVED,
-					data.getMinAddress(), data.getMaxAddress(), null, data, null));
-			}
-			if (!inOld && inNew) {
-				queues.fireEvent(new ProgramChangeRecord(ProgramEvent.COMPOSITE_ADDED,
-					data.getMinAddress(), data.getMaxAddress(), null, null, data));
-			}
-		}
-
-		private void compositeDataRemoved(AddressSpace space, TraceAddressSnapRange range,
-				TraceData removed, TraceData newIsNull) {
-			DomainObjectEventQueues queues = isCodeVisible(space, removed);
-			if (queues == null) {
-				return;
-			}
-			// TODO: ProgramDB doesn't send this.... Should I?
-			queues.fireEvent(new ProgramChangeRecord(ProgramEvent.COMPOSITE_REMOVED,
-				removed.getMinAddress(), removed.getMaxAddress(), null, removed, null));
 		}
 
 		private void dataTypeAdded(long id, DataType oldIsNull, DataType added) {
@@ -452,8 +409,8 @@ public class DBTraceProgramView implements TraceProgramView {
 				instruction.getMinAddress(), instruction.getMinAddress(), null, null, null));
 		}
 
-		private void instructionFallThroughChanged(AddressSpace space,
-				TraceInstruction instruction, boolean oldFallThrough, boolean newFallThrough) {
+		private void instructionFallThroughChanged(AddressSpace space, TraceInstruction instruction,
+				boolean oldFallThrough, boolean newFallThrough) {
 			DomainObjectEventQueues queues = isCodeVisible(space, instruction);
 			if (queues == null) {
 				return;
@@ -642,7 +599,8 @@ public class DBTraceProgramView implements TraceProgramView {
 	}
 
 	protected static class OverlappingAddressRangeKeyIteratorMerger<T> extends
-			PairingIteratorMerger<Entry<AddressRange, T>, Entry<AddressRange, T>, Entry<AddressRange, T>> {
+			PairingIteratorMerger<Entry<AddressRange, T>, Entry<AddressRange, T>,
+				Entry<AddressRange, T>> {
 
 		protected static <T> Iterable<Pair<Entry<AddressRange, T>, Entry<AddressRange, T>>> iter(
 				Iterable<Entry<AddressRange, T>> left, Iterable<Entry<AddressRange, T>> right) {
@@ -1460,8 +1418,7 @@ public class DBTraceProgramView implements TraceProgramView {
 		return eventQueues;
 	}
 
-	protected DomainObjectEventQueues isVisible(AddressSpace space,
-			TraceAddressSnapRange range) {
+	protected DomainObjectEventQueues isVisible(AddressSpace space, TraceAddressSnapRange range) {
 		return viewport.containsAnyUpper(range.getLifespan()) ? getEventQueues(space) : null;
 	}
 
@@ -1497,7 +1454,7 @@ public class DBTraceProgramView implements TraceProgramView {
 					return RangeQueryOcclusion.super.occluded(cu, range, span);
 				}
 				AddressSetView known =
-					memSpace.getAddressesWithState(span, s -> s == TraceMemoryState.KNOWN);
+					memSpace.getAddressesWithState(span, StatePredicate.IS_KNOWN);
 				if (!known.intersects(range.getMinAddress(), range.getMaxAddress())) {
 					return RangeQueryOcclusion.super.occluded(cu, range, span);
 				}

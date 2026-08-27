@@ -17,14 +17,14 @@ package ghidra.app.plugin.core.codebrowser;
 
 import javax.swing.Icon;
 
-import org.apache.commons.lang3.StringUtils;
-
 import docking.ComponentProvider;
 import docking.action.builder.ActionBuilder;
 import docking.tool.ToolConstants;
 import generic.theme.GIcon;
 import ghidra.app.CorePluginPackage;
 import ghidra.app.context.ListingActionContext;
+import ghidra.app.context.NavigatableActionContext;
+import ghidra.app.nav.Navigatable;
 import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.plugin.core.codebrowser.SelectEndpointsAction.RangeEndpoint;
 import ghidra.app.plugin.core.table.TableComponentProvider;
@@ -95,11 +95,13 @@ public class CodeBrowserSelectionPlugin extends Plugin {
 				.menuPath(ToolConstants.MENU_SELECTION, "&Clear Selection")
 				.menuGroup(SELECT_GROUP, "b")
 				.helpLocation(new HelpLocation(HelpTopics.SELECTION, "Clear Selection"))
-				.withContext(ListingActionContext.class, true)
+				.withContext(NavigatableActionContext.class, true)
 				.inWindow(ActionBuilder.When.CONTEXT_MATCHES)
-				.enabledWhen(c -> hasSelection(c))
-				.onAction(c -> ((CodeViewerProvider) c.getComponentProvider())
-						.setSelection(new ProgramSelection()))
+				.enabledWhen(NavigatableActionContext::hasSelection)
+				.onAction(c -> {
+					Navigatable n = c.getNavigatable();
+					n.setSelection(new ProgramSelection());
+				})
 				.buildAndInstall(tool);
 
 		new ActionBuilder("Select Complement", getName())
@@ -149,11 +151,8 @@ public class CodeBrowserSelectionPlugin extends Plugin {
 			tool.setStatusInfo("Unable to create selected ranges table: no addresses in selection");
 			return;
 		}
-		ToolOptions options = tool.getOptions(OPTION_CATEGORY_NAME);
-		int resultsLimit = options.getInt(RANGES_LIMIT_OPTION_NAME, RANGES_LIMIT_DEFAULT);
-		long minLength = options.getLong(MIN_RANGE_SIZE_OPTION_NAME, MIN_RANGE_SIZE_DEFAULT);
-		AddressRangeTableModel model =
-			new AddressRangeTableModel(tool, program, selection, resultsLimit, minLength);
+
+		AddressRangeTableModel model = new AddressRangeTableModel(tool, program, selection);
 		Icon markerIcon = new GIcon("icon.plugin.codebrowser.cursor.marker");
 		String title = "Selected Ranges in " + program.getName();
 		TableComponentProvider<AddressRangeInfo> tableProvider =
@@ -203,20 +202,6 @@ public class CodeBrowserSelectionPlugin extends Plugin {
 		return provider instanceof CodeViewerProvider;
 	}
 
-	private boolean hasSelection(ListingActionContext c) {
-		if (!hasCodeViewer(c)) {
-			return false;
-		}
-
-		if (c.hasSelection()) {
-			return true;
-		}
-
-		CodeViewerProvider provider = (CodeViewerProvider) c.getComponentProvider();
-		String textSelection = provider.getTextSelection();
-		return !StringUtils.isBlank(textSelection);
-	}
-
 	private GhidraProgramTableModel<Address> createTableModel(Program program,
 			CodeUnitIterator iterator, ProgramSelection selection) {
 
@@ -248,7 +233,7 @@ public class CodeBrowserSelectionPlugin extends Plugin {
 			monitor.initialize(size);
 
 			while (iterator.hasNext()) {
-				if (accumulator.size() >= resultsLimit) {
+				if (accumulator.getProgress() >= resultsLimit) {
 					Msg.showWarn(this, null, "Results Truncated",
 						"Results are limited to " + resultsLimit + " code units.\n" +
 							"This limit can be changed by the tool option \"" +

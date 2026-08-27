@@ -390,13 +390,13 @@ public interface TraceObjectSchema {
 	 * path. Thus, for a path of length n, the resulting list has n+1 entries. This is useful for
 	 * searches along the ancestry of a given path:
 	 * 
-	 * <pre>
+	 * <pre>{@code
 	 * List<TargetObjectSchema> schemas = getSuccessorSchemas(path);
 	 * for (; path != null; path = PathUtils.parent(path)) {
 	 * 	TargetObjectSchema schema = schemas.get(path.size());
 	 * 	// ...
 	 * }
-	 * </pre>
+	 * }</pre>
 	 * 
 	 * <p>
 	 * All entries are non-null, though they may be {@link PrimitiveTraceObjectSchema#VOID}.
@@ -786,7 +786,7 @@ public interface TraceObjectSchema {
 		List<TraceObjectSchema> schemas = getSuccessorSchemas(path);
 		for (; path != null; path = path.parent()) {
 			TraceObjectSchema check = schemas.get(path.size());
-			if (check == schema) {
+			if (schema.isAssignableFrom(check)) {
 				return path;
 			}
 			KeyPath inAgg = Private.searchForSuitableInAggregate(check, schema);
@@ -1009,26 +1009,29 @@ public interface TraceObjectSchema {
 	 * 
 	 * <p>
 	 * This places some conventional restrictions / expectations on models where registers are given
-	 * on a frame-by-frame basis. The schema should present the {@link TraceRegisterContainer}
-	 * as the same object or a successor to {@link TraceStackFrame}, which must in turn be a
-	 * successor to {@link TraceStack}. The frame level (an index) must be in the path from stack to
-	 * frame. There can be no wildcards between the frame and the register container. For example,
-	 * the container for {@code Threads[1]} may be {@code Threads[1].Stack[n].Registers}, where
+	 * on a frame-by-frame basis. The schema should present the {@link TraceRegisterContainer} as
+	 * the same object or a successor to {@link TraceStackFrame}, which must in turn be a successor
+	 * to {@link TraceStack}. The frame level (an index) must be in the path from stack to frame.
+	 * There can be no wildcards between the frame and the register container. For example, the
+	 * container for {@code Threads[1]} may be {@code Threads[1].Stack[n].Registers}, where
 	 * {@code n} is the frame level. {@code Threads[1].Stack} would have the {@link TraceStack}
 	 * interface, {@code Threads[1].Stack[0]} would have the {@link TraceStackFrame} interface, and
 	 * {@code Threads[1].Stack[0].Registers} would have the {@link TraceRegisterContainer}
-	 * interface. Note it is not sufficient for {@link TraceRegisterContainer} to be a
-	 * successor of {@link TraceStack} with a single index between. There <em>must</em> be an
-	 * intervening {@link TraceStackFrame}, and the frame level (index) must precede it.
+	 * interface. Note it is not sufficient for {@link TraceRegisterContainer} to be a successor of
+	 * {@link TraceStack} with a single index between. There <em>must</em> be an intervening
+	 * {@link TraceStackFrame}, and the frame level (index) must precede it.
 	 * 
-	 * @param frameLevel the frame level. May be ignored if not applicable
+	 * @param frameLevel the frame level. Must be 0 if not applicable
 	 * @param path the path of the seed object relative to the root
 	 * @return the filter where the register container should be found, possibly
 	 *         {@link PathFilter#NONE}
 	 */
 	default PathFilter searchForRegisterContainer(int frameLevel, KeyPath path) {
 		KeyPath simple = searchForSuitable(TraceRegisterContainer.class, path);
-		if (simple != null) {
+		// NB: This is technically not correct. It's possible, although unlikely, that
+		//  the target has an accessible stack but no stack in its schema.  If so,
+		//  this method should be called with 0 instead of the actual stack level.
+		if (simple != null && frameLevel == 0) {
 			return PathFilter.pattern(simple);
 		}
 		KeyPath stackPath = searchForSuitable(TraceStack.class, path);
@@ -1053,7 +1056,7 @@ public interface TraceObjectSchema {
 				framePatternRelStack.applyKeys(index).getSingletonPath();
 			KeyPath framePath = stackPath.extend(framePathRelStack);
 			KeyPath regsPath = searchForSuitable(TraceRegisterContainer.class, framePath);
-			if (regsPath != null) {
+			if (regsPath != null && stackPath.isAncestor(regsPath)) {
 				patterns.add(new PathPattern(regsPath));
 			}
 		}

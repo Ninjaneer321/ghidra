@@ -38,6 +38,10 @@ public class StructureEditorProvider
 	public StructureEditorProvider(Plugin plugin, Structure structureDataType,
 			boolean showHexNumbers) {
 		super(plugin);
+		if (structureDataType.isDeleted()) {
+			throw new IllegalArgumentException(
+				"Structure has been deleted: " + structureDataType.getPathName());
+		}
 		setIcon(STRUCTURE_EDITOR_ICON);
 		editorModel = new StructureEditorModel(this, showHexNumbers);
 		editorModel.load(structureDataType);
@@ -46,7 +50,6 @@ public class StructureEditorProvider
 		plugin.getTool().addComponentProvider(this, true);
 		updateTitle();
 		addActionsToTool();
-		editorPanel.getTable().requestFocus();
 		editorModel.selectionChanged();
 	}
 
@@ -82,6 +85,9 @@ public class StructureEditorProvider
 			new AddBitFieldAction(this),
 			new EditBitFieldAction(this),
 			new ShowDataTypeInTreeAction(this),
+			new NextPrevDefinedComponentAction(this, true),
+			new NextPrevDefinedComponentAction(this, false),
+			new JumpToOffsetAction(this),
 
 //			new ViewBitFieldAction(this)
 		};
@@ -160,4 +166,14 @@ public class StructureEditorProvider
 		}
 		return null;
 	}
+
+	public void goToNextDefinedRow(boolean forward) {
+		((StructureEditorPanel) editorPanel).goToNextDefinedRow(forward);
+	}
+
+	public void goToOffset(int offset) {
+		((StructureEditorPanel) editorPanel).goToOffset(offset);
+	}
+
+
 }

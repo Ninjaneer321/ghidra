@@ -23,7 +23,6 @@ import ghidra.app.util.Option;
 import ghidra.app.util.bin.ByteProvider;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.framework.model.DomainObject;
-import ghidra.framework.model.Project;
 import ghidra.program.model.address.*;
 import ghidra.program.model.lang.*;
 import ghidra.program.model.listing.Program;
@@ -47,7 +46,7 @@ public class MotorolaHexLoader extends AbstractProgramLoader {
 	}
 
 	@Override
-	public boolean supportsLoadIntoProgram() {
+	public boolean supportsLoadIntoProgram(Program program) {
 		return true;
 	}
 
@@ -78,10 +77,12 @@ public class MotorolaHexLoader extends AbstractProgramLoader {
 	}
 
 	static boolean isPossibleHexFile(ByteProvider provider) {
+		final int MAX_BLANK_LINES = 100;
 		try (BoundedBufferedReader reader =
 			new BoundedBufferedReader(new InputStreamReader(provider.getInputStream(0)))) {
+			int i = 0;
 			String line = reader.readLine();
-			while (line.matches("^\\s*$")) {
+			while (i++ < MAX_BLANK_LINES && line.isBlank()) {
 				line = reader.readLine();
 			}
 			return line.matches("^[S:][0-9a-fA-F]+$");
@@ -160,23 +161,15 @@ public class MotorolaHexLoader extends AbstractProgramLoader {
 	}
 
 	@Override
-	protected List<Loaded<Program>> loadProgram(ByteProvider provider, String programName,
-			Project project, String programFolderPath, LoadSpec loadSpec, List<Option> options,
-			MessageLog log, Object consumer, TaskMonitor monitor)
+	protected List<Loaded<Program>> loadProgram(ImporterSettings settings)
 			throws IOException, LoadException, CancelledException {
-		LanguageCompilerSpecPair pair = loadSpec.getLanguageCompilerSpec();
-		Language importerLanguage = getLanguageService().getLanguage(pair.languageID);
-		CompilerSpec importerCompilerSpec =
-			importerLanguage.getCompilerSpecByID(pair.compilerSpecID);
 
-		Program prog = createProgram(provider, programName, null, getName(), importerLanguage,
-			importerCompilerSpec, consumer);
-		List<Loaded<Program>> loadedList =
-			List.of(new Loaded<>(prog, programName, project, programFolderPath, consumer));
+		Program prog = createProgram(null, settings);
+		List<Loaded<Program>> loadedList = List.of(new Loaded<>(prog, settings));
 		boolean success = false;
 		try {
-			loadInto(provider, loadSpec, options, log, prog, monitor);
-			createDefaultMemoryBlocks(prog, importerLanguage, log);
+			loadInto(prog, settings);
+			createDefaultMemoryBlocks(prog, settings);
 			success = true;
 			return loadedList;
 		}
@@ -188,16 +181,16 @@ public class MotorolaHexLoader extends AbstractProgramLoader {
 	}
 
 	@Override
-	protected void loadProgramInto(ByteProvider provider, LoadSpec loadSpec,
-			List<Option> options, MessageLog log, Program prog, TaskMonitor monitor)
+	protected void loadProgramInto(Program prog, ImporterSettings settings)
 			throws IOException, LoadException, CancelledException {
-		Address baseAddr = getBaseAddr(options);
+		Address baseAddr = getBaseAddr(settings.options());
 
 		if (baseAddr == null) {
 			baseAddr = prog.getAddressFactory().getDefaultAddressSpace().getAddress(0);
 		}
 		try {
-			processMotorolaHex(provider, options, prog, baseAddr, monitor);
+			processMotorolaHex(settings.provider(), settings.options(), prog, baseAddr,
+				settings.monitor());
 		}
 		catch (AddressOverflowException e) {
 			throw new LoadException(
@@ -426,7 +419,7 @@ public class MotorolaHexLoader extends AbstractProgramLoader {
 
 	@Override
 	public List<Option> getDefaultOptions(ByteProvider provider, LoadSpec loadSpec,
-			DomainObject domainObject, boolean loadIntoProgram) {
+			DomainObject domainObject, boolean loadIntoProgram, boolean mirrorFsLayout) {
 		String blockName = "";
 		boolean isOverlay = false;
 		Address baseAddr = null;
@@ -444,18 +437,13 @@ public class MotorolaHexLoader extends AbstractProgramLoader {
 		ArrayList<Option> list = new ArrayList<Option>();
 
 		if (loadIntoProgram) {
-			list.add(new Option(OPTION_NAME_IS_OVERLAY, isOverlay));
-			list.add(new Option(OPTION_NAME_BLOCK_NAME, blockName));
+			list.add(Option.newBoolean(OPTION_NAME_IS_OVERLAY).value(isOverlay).build());
+			list.add(Option.newString(OPTION_NAME_BLOCK_NAME).value(blockName).build());
 		}
 		else {
 			isOverlay = false;
 		}
-		if (baseAddr == null) {
-			list.add(new Option(OPTION_NAME_BASE_ADDRESS, Address.class));
-		}
-		else {
-			list.add(new Option(OPTION_NAME_BASE_ADDRESS, baseAddr));
-		}
+		list.add(Option.newAddress(OPTION_NAME_BASE_ADDRESS).value(baseAddr).build());
 		return list;
 	}
 

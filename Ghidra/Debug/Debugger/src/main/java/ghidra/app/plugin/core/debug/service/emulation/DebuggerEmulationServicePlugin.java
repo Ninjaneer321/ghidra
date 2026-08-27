@@ -16,6 +16,7 @@
 package ghidra.app.plugin.core.debug.service.emulation;
 
 import java.io.IOException;
+import java.lang.invoke.MethodHandles;
 import java.util.*;
 import java.util.Map.Entry;
 import java.util.concurrent.*;
@@ -40,31 +41,42 @@ import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.plugin.core.debug.DebuggerPluginPackage;
 import ghidra.app.plugin.core.debug.event.TraceClosedPluginEvent;
 import ghidra.app.plugin.core.debug.gui.DebuggerResources;
+import ghidra.app.plugin.core.debug.gui.emulation.DebuggerEmulateFunctionDialog;
+import ghidra.app.plugin.core.debug.service.emulation.data.DefaultPcodeDebuggerAccess;
 import ghidra.app.services.*;
 import ghidra.async.AsyncLazyMap;
 import ghidra.debug.api.control.ControlMode;
-import ghidra.debug.api.emulation.DebuggerPcodeEmulatorFactory;
-import ghidra.debug.api.emulation.DebuggerPcodeMachine;
+import ghidra.debug.api.emulation.EmulatorFactory;
 import ghidra.debug.api.modules.DebuggerStaticMappingChangeListener;
+import ghidra.debug.api.target.Target;
 import ghidra.debug.api.tracemgr.DebuggerCoordinates;
+import ghidra.framework.options.SaveState;
 import ghidra.framework.plugintool.*;
+import ghidra.framework.plugintool.annotation.AutoConfigStateField;
 import ghidra.framework.plugintool.annotation.AutoServiceConsumed;
 import ghidra.framework.plugintool.util.PluginStatus;
+import ghidra.pcode.emu.PcodeMachine;
 import ghidra.pcode.emu.PcodeMachine.AccessKind;
 import ghidra.pcode.emu.PcodeMachine.SwiMode;
 import ghidra.pcode.exec.InjectionErrorPcodeExecutionException;
+import ghidra.pcode.exec.trace.TraceEmulationIntegration.Writer;
+import ghidra.pcode.exec.trace.data.DefaultPcodeTraceAccess;
+import ghidra.pcode.exec.trace.data.PcodeTraceAccess;
 import ghidra.program.model.address.*;
+import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.program.util.ProgramLocation;
 import ghidra.trace.model.*;
 import ghidra.trace.model.breakpoint.*;
+import ghidra.trace.model.breakpoint.TraceBreakpointKind.CommonSet;
 import ghidra.trace.model.guest.TracePlatform;
 import ghidra.trace.model.program.TraceProgramView;
 import ghidra.trace.model.thread.TraceThread;
 import ghidra.trace.model.time.TraceSnapshot;
 import ghidra.trace.model.time.schedule.*;
 import ghidra.trace.model.time.schedule.Scheduler.RunResult;
-import ghidra.util.*;
+import ghidra.util.HelpLocation;
+import ghidra.util.Msg;
 import ghidra.util.classfinder.ClassSearcher;
 import ghidra.util.datastruct.ListenerSet;
 import ghidra.util.exception.CancelledException;
@@ -92,6 +104,11 @@ import ghidra.util.task.TaskMonitor;
 public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEmulationService {
 	protected static final int MAX_CACHE_SIZE = 5;
 
+	private static final AutoConfigState.ClassHandler<
+		DebuggerEmulationServicePlugin> CONFIG_STATE_HANDLER =
+			AutoConfigState.wireHandler(DebuggerEmulationServicePlugin.class,
+				MethodHandles.lookup());
+
 	public interface EmulateProgramAction {
 		String NAME = "Emulate Program in new Trace";
 		String DESCRIPTION = "Emulate the current program in a new trace starting at the cursor";
@@ -105,6 +122,27 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 					.description(DESCRIPTION)
 					.toolBarIcon(ICON)
 					.toolBarGroup(GROUP)
+					.menuPath(DebuggerPluginPackage.NAME, NAME)
+					.menuIcon(ICON)
+					.menuGroup(GROUP)
+					.popupMenuPath(NAME)
+					.popupMenuIcon(ICON)
+					.popupMenuGroup(GROUP)
+					.helpLocation(new HelpLocation(ownerName, HELP_ANCHOR));
+		}
+	}
+
+	interface EmulateFunctionAction {
+		String NAME = "Emulate Function";
+		String DESCRIPTION = "Emulate the current function in a new trace";
+		Icon ICON = DebuggerResources.ICON_EMULATE;
+		String GROUP = DebuggerResources.GROUP_GENERAL;
+		String HELP_ANCHOR = "emulate_function";
+
+		static ActionBuilder builder(Plugin owner) {
+			String ownerName = owner.getName();
+			return new ActionBuilder(NAME, ownerName)
+					.description(DESCRIPTION)
 					.menuPath(DebuggerPluginPackage.NAME, NAME)
 					.menuIcon(ICON)
 					.menuGroup(GROUP)
@@ -286,8 +324,10 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 		}
 	}
 
-	protected DebuggerPcodeEmulatorFactory emulatorFactory =
-		new BytesDebuggerPcodeEmulatorFactory();
+	@AutoConfigStateField
+	private String defaultEmulator = DefaultEmulatorFactory.TITLE;
+	protected EmulatorFactory emulatorFactory =
+		new DefaultEmulatorFactory();
 
 	protected final Set<CacheKey> eldest = new LinkedHashSet<>();
 	protected final NavigableMap<CacheKey, CachedEmulator> cache = new TreeMap<>();
@@ -357,10 +397,11 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 	private AutoService.Wiring autoServiceWiring;
 
 	DockingAction actionEmulateProgram;
+	DockingAction actionEmulateFunction;
 	DockingAction actionEmulateAddThread;
 	DockingAction actionInvalidateCache;
-	Map<Class<? extends DebuggerPcodeEmulatorFactory>, ToggleDockingAction> //
-	actionsChooseEmulatorFactory = new HashMap<>();
+	Map<Class<? extends EmulatorFactory>, ToggleDockingAction> actionsChooseEmulatorFactory =
+		new HashMap<>();
 
 	final ChangeListener classChangeListener = this::classesChanged;
 
@@ -382,6 +423,12 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 				.popupWhen(this::emulateProgramEnabled)
 				.onAction(this::emulateProgramActivated)
 				.buildAndInstall(tool);
+		actionEmulateFunction = EmulateFunctionAction.builder(this)
+				.withContext(ProgramLocationActionContext.class)
+				.enabledWhen(this::emulateFunctionEnabled)
+				.popupWhen(this::emulateFunctionEnabled)
+				.onAction(this::emulateFunctionActivated)
+				.buildAndInstall(tool);
 		actionEmulateAddThread = EmulateAddThreadAction.builder(this)
 				.withContext(ProgramLocationActionContext.class)
 				.enabledWhen(this::emulateAddThreadEnabled)
@@ -400,7 +447,7 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 		updateConfigureEmulatorStates();
 	}
 
-	private ToggleDockingAction createActionChooseEmulator(DebuggerPcodeEmulatorFactory factory) {
+	private ToggleDockingAction createActionChooseEmulator(EmulatorFactory factory) {
 		ToggleDockingAction action = ConfigureEmulatorAction.builder(this)
 				.menuPath(DebuggerPluginPackage.NAME, ConfigureEmulatorAction.NAME,
 					factory.getTitle())
@@ -412,21 +459,18 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 	}
 
 	private void updateConfigureEmulatorStates() {
-		Map<Class<? extends DebuggerPcodeEmulatorFactory>, DebuggerPcodeEmulatorFactory> byClass =
+		Map<Class<? extends EmulatorFactory>, EmulatorFactory> byClass =
 			getEmulatorFactories().stream()
-					.collect(Collectors.toMap(DebuggerPcodeEmulatorFactory::getClass,
-						Objects::requireNonNull));
-		Iterator<Entry<Class<? extends DebuggerPcodeEmulatorFactory>, ToggleDockingAction>> it =
+					.collect(Collectors.toMap(EmulatorFactory::getClass, Objects::requireNonNull));
+		Iterator<Entry<Class<? extends EmulatorFactory>, ToggleDockingAction>> it =
 			actionsChooseEmulatorFactory.entrySet().iterator();
 		while (it.hasNext()) {
-			Entry<Class<? extends DebuggerPcodeEmulatorFactory>, ToggleDockingAction> ent =
-				it.next();
+			Entry<Class<? extends EmulatorFactory>, ToggleDockingAction> ent = it.next();
 			if (!byClass.keySet().contains(ent.getKey())) {
 				tool.removeAction(ent.getValue());
 			}
 		}
-		for (Entry<Class<? extends DebuggerPcodeEmulatorFactory>, DebuggerPcodeEmulatorFactory> ent : byClass
-				.entrySet()) {
+		for (Entry<Class<? extends EmulatorFactory>, EmulatorFactory> ent : byClass.entrySet()) {
 			if (!actionsChooseEmulatorFactory.containsKey(ent.getKey())) {
 				ToggleDockingAction action = createActionChooseEmulator(ent.getValue());
 				action.setSelected(ent.getKey() == emulatorFactory.getClass());
@@ -473,6 +517,32 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 		}
 	}
 
+	private boolean emulateFunctionEnabled(ProgramLocationActionContext ctx) {
+		Program program = ctx.getProgram();
+		Address address = ctx.getAddress();
+		if (program == null || program instanceof TraceProgramView || address == null) {
+			return false;
+		}
+		Function function = program.getFunctionManager().getFunctionContaining(address);
+		if (function == null) {
+			return false;
+		}
+		return true;
+	}
+
+	private void emulateFunctionActivated(ProgramLocationActionContext ctx) {
+		Program program = ctx.getProgram();
+		Address address = ctx.getAddress();
+		if (program == null || address == null) {
+			return;
+		}
+		Function function = program.getFunctionManager().getFunctionContaining(address);
+		if (function == null) {
+			return;
+		}
+		tool.showDialog(new DebuggerEmulateFunctionDialog(tool, function));
+	}
+
 	private boolean emulateAddThreadEnabled(ProgramLocationActionContext ctx) {
 		Program programOrView = ctx.getProgram();
 		if (programOrView instanceof TraceProgramView view) {
@@ -491,8 +561,12 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 			!ProgramEmulationUtils.isEmulatedProgram(current.getTrace())) {
 			return false;
 		}
+		ProgramLocation programLoc = ctx.getLocation();
+		if (programLoc == null) {
+			return false;
+		}
 		TraceLocation traceLoc = staticMappings.getOpenMappedLocation(
-			current.getTrace(), ctx.getLocation(), current.getSnap());
+			current.getTrace(), programLoc, current.getSnap());
 		if (traceLoc == null) {
 			return false;
 		}
@@ -557,7 +631,7 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 		invalidateCache();
 	}
 
-	private void configureEmulatorActivated(DebuggerPcodeEmulatorFactory factory) {
+	private void configureEmulatorActivated(EmulatorFactory factory) {
 		// TODO: Pull up config page. Tool Options? Program/Trace Options?
 		setEmulatorFactory(factory);
 	}
@@ -578,13 +652,14 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 	}
 
 	@Override
-	public Collection<DebuggerPcodeEmulatorFactory> getEmulatorFactories() {
-		return ClassSearcher.getInstances(DebuggerPcodeEmulatorFactory.class);
+	public Collection<EmulatorFactory> getEmulatorFactories() {
+		return ClassSearcher.getInstances(EmulatorFactory.class);
 	}
 
 	@Override
-	public synchronized void setEmulatorFactory(DebuggerPcodeEmulatorFactory factory) {
+	public synchronized void setEmulatorFactory(EmulatorFactory factory) {
 		emulatorFactory = Objects.requireNonNull(factory);
+		defaultEmulator = emulatorFactory.getTitle();
 		for (ToggleDockingAction toggle : actionsChooseEmulatorFactory.values()) {
 			toggle.setSelected(false);
 		}
@@ -598,7 +673,7 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 	}
 
 	@Override
-	public synchronized DebuggerPcodeEmulatorFactory getEmulatorFactory() {
+	public synchronized EmulatorFactory getEmulatorFactory() {
 		return emulatorFactory;
 	}
 
@@ -640,7 +715,7 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 		return task.future;
 	}
 
-	protected void installBreakpoints(Trace trace, long snap, DebuggerPcodeMachine<?> emu) {
+	protected void installBreakpoints(Trace trace, long snap, PcodeMachine<?> emu) {
 		Lifespan span = Lifespan.at(snap);
 		TraceBreakpointManager bm = trace.getBreakpointManager();
 		for (AddressSpace as : trace.getBaseAddressFactory().getAddressSpaces()) {
@@ -650,12 +725,8 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 					continue;
 				}
 				Set<TraceBreakpointKind> kinds = bpt.getKinds(snap);
-				boolean isExecute =
-					kinds.contains(TraceBreakpointKind.HW_EXECUTE) ||
-						kinds.contains(TraceBreakpointKind.SW_EXECUTE);
-				boolean isRead = kinds.contains(TraceBreakpointKind.READ);
-				boolean isWrite = kinds.contains(TraceBreakpointKind.WRITE);
-				if (isExecute) {
+				if (kinds.contains(TraceBreakpointKind.HW_EXECUTE) ||
+					kinds.contains(TraceBreakpointKind.SW_EXECUTE)) {
 					Address minAddress = bpt.getMinAddress(snap);
 					try {
 						emu.inject(minAddress, bpt.getEmuSleigh(snap));
@@ -665,13 +736,13 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 						emu.inject(minAddress, "emu_injection_err();");
 					}
 				}
-				if (isRead && isWrite) {
+				if (kinds.equals(CommonSet.ACCESS.kinds())) {
 					emu.addAccessBreakpoint(bpt.getRange(snap), AccessKind.RW);
 				}
-				else if (isRead) {
+				else if (kinds.equals(CommonSet.READ.kinds())) {
 					emu.addAccessBreakpoint(bpt.getRange(snap), AccessKind.R);
 				}
-				else if (isWrite) {
+				else if (kinds.equals(CommonSet.WRITE.kinds())) {
 					emu.addAccessBreakpoint(bpt.getRange(snap), AccessKind.W);
 				}
 			}
@@ -684,9 +755,16 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 		TracePlatform platform = key.platform;
 		TraceSchedule time = key.time;
 
-		Map.Entry<CacheKey, CachedEmulator> ancestor = findNearestPrefix(key);
-		if (ancestor != null) {
-			CacheKey prevKey = ancestor.getKey();
+		TraceSnapshot tracePrefix = trace.getTimeManager().findSnapshotWithNearestPrefix(time);
+		if (tracePrefix != null && tracePrefix.isSnapOnly(true)) {
+			tracePrefix = null;
+		}
+		Map.Entry<CacheKey, CachedEmulator> cachePrefix = findNearestPrefix(key);
+		if (cachePrefix != null && (tracePrefix == null ||
+			cachePrefix.getKey().time.compareTo(tracePrefix.getSchedule()) >= 0)) {
+			CacheKey prevKey = cachePrefix.getKey();
+
+			Msg.debug(this, "Using cached emulator at %s".formatted(prevKey.time));
 
 			synchronized (cache) {
 				cache.remove(prevKey);
@@ -695,8 +773,8 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 
 			// TODO: Handle errors, and add to proper place in cache?
 			// TODO: Finish partially-executed instructions?
-			try (BusyEmu be = new BusyEmu(ancestor.getValue())) {
-				DebuggerPcodeMachine<?> emu = be.ce.emulator();
+			try (BusyEmu be = new BusyEmu(cachePrefix.getValue())) {
+				PcodeMachine<?> emu = be.ce.emulator();
 
 				emu.clearAllInjects();
 				emu.clearAccessBreakpoints();
@@ -710,14 +788,28 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 				return be.dup();
 			}
 		}
-		DebuggerPcodeMachine<?> emu = emulatorFactory.create(tool, platform, time.getSnap(),
-			targetService == null ? null : targetService.getTarget(trace));
-		try (BusyEmu be = new BusyEmu(new CachedEmulator(key.trace, emu))) {
+
+		Target target = targetService == null ? null : targetService.getTarget(trace);
+		DefaultPcodeDebuggerAccess from = new DefaultPcodeDebuggerAccess(tool, target, platform,
+			tracePrefix != null ? tracePrefix.getKey() : time.getSnap(), time.getSnap());
+		Writer writer = DebuggerEmulationIntegration.bytesDelayedWriteTrace(from);
+
+		PcodeMachine<?> emu = emulatorFactory.create(from, writer);
+		try (BusyEmu be = new BusyEmu(new CachedEmulator(key.trace, emu, writer))) {
 			installBreakpoints(key.trace, key.time.getSnap(), be.ce.emulator());
-			monitor.initialize(time.totalTickCount());
+			monitor.initialize(time.totalTickCount() -
+				(tracePrefix != null ? tracePrefix.getSchedule().totalTickCount() : 0));
 			createRegisterSpaces(trace, time, monitor);
 			monitor.setMessage("Emulating");
-			time.execute(trace, emu, monitor);
+			if (tracePrefix != null) {
+				Msg.debug(this, "Using new emulator from scratch snapshot %s"
+						.formatted(tracePrefix.getScheduleString()));
+				time.finish(trace, tracePrefix.getSchedule(), emu, monitor);
+			}
+			else {
+				Msg.debug(this, "Using new emulator from snap %d".formatted(time.getSnap()));
+				time.execute(trace, emu, monitor);
+			}
 			return be.dup();
 		}
 	}
@@ -741,7 +833,12 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 			destSnap = key.trace.getTimeManager().findScratchSnapshot(key.time);
 			destSnap.setDescription("Emulated");
 			try {
-				ce.emulator().writeDown(key.platform, destSnap.getKey(), key.time.getSnap());
+				PcodeTraceAccess into = new DefaultPcodeTraceAccess(key.platform, destSnap.getKey(),
+					key.time.getSnap());
+				ce.writer().writeDown(into);
+				TraceThread lastThread = key.time.getLastThread(key.trace);
+				destSnap.setEventThread(lastThread);
+				destSnap.setVersion(key.trace.getEmulatorCacheVersion());
 			}
 			catch (Throwable e) {
 				Msg.showError(this, null, "Emulate",
@@ -868,7 +965,7 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 	}
 
 	@Override
-	public DebuggerPcodeMachine<?> getCachedEmulator(Trace trace, TraceSchedule time) {
+	public PcodeMachine<?> getCachedEmulator(Trace trace, TraceSchedule time) {
 		CachedEmulator ce =
 			cache.get(new CacheKey(trace.getPlatformManager().getHostPlatform(), time));
 		return ce == null || !ce.isValid() ? null : ce.emulator();
@@ -916,4 +1013,19 @@ public class DebuggerEmulationServicePlugin extends Plugin implements DebuggerEm
 			}
 		}
 	}
+
+	@Override
+	public void readConfigState(SaveState saveState) {
+		CONFIG_STATE_HANDLER.readConfigState(this, saveState);
+
+		for (ToggleDockingAction toggle : actionsChooseEmulatorFactory.values()) {
+			toggle.setSelected(toggle.getMenuBarData().getMenuItemName().equals(defaultEmulator));
+		}
+	}
+
+	@Override
+	public void writeConfigState(SaveState saveState) {
+		CONFIG_STATE_HANDLER.writeConfigState(this, saveState);
+	}
+
 }

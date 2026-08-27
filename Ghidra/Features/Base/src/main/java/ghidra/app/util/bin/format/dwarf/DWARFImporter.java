@@ -21,7 +21,7 @@ import java.util.*;
 import org.apache.commons.io.FilenameUtils;
 
 import ghidra.app.plugin.core.datamgr.util.DataTypeUtils;
-import ghidra.app.util.bin.BinaryReader;
+import ghidra.app.util.bin.format.dwarf.DWARFImportOptions.MacroEnumSetting;
 import ghidra.app.util.bin.format.dwarf.line.DWARFLine;
 import ghidra.app.util.bin.format.dwarf.line.DWARFLine.SourceFileAddr;
 import ghidra.app.util.bin.format.dwarf.line.DWARFLine.SourceFileInfo;
@@ -38,7 +38,6 @@ import ghidra.program.model.sourcemap.SourceFileManager;
 import ghidra.util.*;
 import ghidra.util.exception.*;
 import ghidra.util.task.TaskMonitor;
-import utility.function.Dummy;
 
 /**
  * Performs a DWARF datatype import and a DWARF function import, under the control of the
@@ -75,7 +74,7 @@ public class DWARFImporter {
 	 * <p>
 	 * After moving each DataType, if the folder is empty, remove the folder.
 	 *
-	 * @throws CancelledException
+	 * @throws CancelledException if the user cancelled the operation
 	 */
 	private void moveTypesIntoSourceFolders() throws CancelledException {
 
@@ -101,7 +100,7 @@ public class DWARFImporter {
 
 			if ((monitor.getProgress() % 5) == 0) {
 				/* balance between getting work done and pampering the swing thread */
-				Swing.runNow(Dummy.runnable());
+				Swing.allowSwingToProcessEvents();
 			}
 
 			DataType dataType =
@@ -198,17 +197,11 @@ public class DWARFImporter {
 	 * "." and "/../" entries stripped and then be placed under artificial directories based on
 	 * {@code DEFAULT_COMPILATION_DIR}.
 	 * 
-	 * @param reader reader
 	 * @throws CancelledException if cancelled by user
 	 * @throws IOException if error during reading
 	 * @throws LockException if invoked without exclusive access
 	 */
-	private void addSourceLineInfo(BinaryReader reader)
-			throws CancelledException, IOException, LockException {
-		if (reader == null) {
-			Msg.warn(this, "Can't add source line info - reader is null");
-			return;
-		}
+	private void addSourceLineInfo() throws CancelledException, IOException, LockException {
 		int entryCount = 0;
 		Program ghidraProgram = prog.getGhidraProgram();
 		long maxLength = prog.getImportOptions().getMaxSourceMapEntryLength();
@@ -222,14 +215,8 @@ public class DWARFImporter {
 		List<SourceFileAddr> sourceInfo = new ArrayList<>();
 		for (DWARFCompilationUnit cu : compUnits) {
 			DWARFLine dLine = cu.getLine();
-			monitor.increment(1);
-			for (int i = 0; i < dLine.getNumFiles(); ++i) {
-				String filePath = dLine.getFilePath(i, true);
-				if (filePath == null) {
-					continue;
-				}
-				byte[] md5 = dLine.getFile(i).getMD5();
-				SourceFileInfo sfi = new SourceFileInfo(filePath, md5);
+			monitor.increment();
+			for (SourceFileInfo sfi : dLine.getAllSourceFileInfos()) {
 				if (sourceFileInfoToSourceFile.containsKey(sfi)) {
 					continue;
 				}
@@ -237,11 +224,11 @@ public class DWARFImporter {
 					continue;
 				}
 				try {
-					String path = SourceFileUtils.normalizeDwarfPath(filePath,
+					String path = SourceFileUtils.normalizeDwarfPath(sfi.filePath(),
 						DEFAULT_COMPILATION_DIR);
 					SourceFileIdType type =
-						md5 == null ? SourceFileIdType.NONE : SourceFileIdType.MD5;
-					SourceFile sFile = new SourceFile(path, type, md5);
+						sfi.md5() == null ? SourceFileIdType.NONE : SourceFileIdType.MD5;
+					SourceFile sFile = new SourceFile(path, type, sfi.md5());
 					sourceManager.addSourceFile(sFile);
 					sourceFileInfoToSourceFile.put(sfi, sFile);
 				}
@@ -254,18 +241,21 @@ public class DWARFImporter {
 					continue;
 				}
 			}
-			sourceInfo.addAll(cu.getLine().getAllSourceFileAddrInfo(cu, reader));
+			sourceInfo.addAll(cu.getLine().getAllSourceFileAddrInfo(cu));
 		}
 
-		monitor.setIndeterminate(true);
-		monitor.setMessage("Sorting " + sourceInfo.size() + " entries");
-		sourceInfo.sort((i, j) -> Long.compareUnsigned(i.address(), j.address()));
+		int sourceInfoSize = sourceInfo.size();
+		if (sourceInfoSize > 1) {
+			monitor.setIndeterminate(true);
+			monitor.setMessage("Sorting " + sourceInfoSize + "entries");
+			sourceInfo.sort((i, j) -> Long.compareUnsigned(i.address(), j.address()));
+		}
 		monitor.setIndeterminate(false);
 		monitor.initialize(sourceInfo.size(), "DWARF: Applying Source Map Info");
 
 		AddressSet warnedAddresses = new AddressSet();
 		for (int i = 0; i < sourceInfo.size(); i++) {
-			monitor.increment(1);
+			monitor.increment();
 			SourceFileAddr sfa = sourceInfo.get(i);
 			if (SOURCEFILENAMES_IGNORE.contains(sfa.fileName()) ||
 				SOURCEFILENAMES_IGNORE.contains(FilenameUtils.getName(sfa.fileName())) ||
@@ -388,10 +378,10 @@ public class DWARFImporter {
 
 	/**
 	 * Imports DWARF information according to the {@link DWARFImportOptions} set.
-	 * @return
-	 * @throws IOException
-	 * @throws DWARFException
-	 * @throws CancelledException
+	 * @return A {@link DWARFImportSummary}
+	 * @throws IOException if an IO-related error occurred
+	 * @throws DWARFException if a DWARF-related error occurred
+	 * @throws CancelledException if the user cancelled the operation
 	 */
 	public DWARFImportSummary performImport()
 			throws IOException, DWARFException, CancelledException {
@@ -426,16 +416,24 @@ public class DWARFImporter {
 			}
 			else {
 				try {
-					addSourceLineInfo(prog.getDebugLineBR());
+					addSourceLineInfo();
 				}
 				catch (LockException e) {
 					throw new AssertException("LockException after exclusive access verified");
 				}
 			}
 		}
+		MacroEnumSetting setting = importOptions.getMacroEnumSetting();
+		if (!setting.equals(MacroEnumSetting.NONE)) {
+			long macro_ts = System.currentTimeMillis();
+			DWARFMacroEnumCreator enumCreator = new DWARFMacroEnumCreator(prog);
+			enumCreator.createEnumsFromMacroInfo(setting.equals(MacroEnumSetting.ALL), monitor);
+			importSummary.macroElapsedMS = System.currentTimeMillis() - macro_ts;
+		}
 
 		importSummary.totalElapsedMS = System.currentTimeMillis() - start_ts;
 
 		return importSummary;
 	}
+
 }

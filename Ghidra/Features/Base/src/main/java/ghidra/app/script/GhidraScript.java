@@ -204,7 +204,7 @@ public abstract class GhidraScript extends FlatProgramAPI {
 	 * @deprecated Use {@link #set(GhidraState)} or {@link #set(GhidraState, ScriptControls)}
 	 *   instead
 	 */
-	@Deprecated(since = "11.5")
+	@Deprecated(since = "12.0")
 	public final void set(GhidraState state, TaskMonitor monitor, PrintWriter writer) {
 		set(state, new ScriptControls(writer, writer, monitor));
 	}
@@ -267,7 +267,7 @@ public abstract class GhidraScript extends FlatProgramAPI {
 	 * @deprecated Use {@link #execute(GhidraState, ScriptControls)} instead to also set a 
 	 *   {@link PrintWriter} for {@code stderr}
 	 */
-	@Deprecated(since = "11.5")
+	@Deprecated(since = "12.0")
 	public final void execute(GhidraState runState, TaskMonitor runMonitor, PrintWriter runWriter)
 			throws Exception {
 		execute(runState, new ScriptControls(runWriter, runWriter, runMonitor));
@@ -1003,7 +1003,7 @@ public abstract class GhidraScript extends FlatProgramAPI {
 	 * @return a demangled version of the mangled string, or null if it could not be demangled
 	 * @deprecated Use {@link DemanglerUtil#demangle(Program, String, Address)} instead
 	 */
-	@Deprecated(since = "11.5")
+	@Deprecated(since = "12.0")
 	public String getDemangled(String mangled) {
 		List<DemangledObject> demangledObjs = DemanglerUtil.demangle(currentProgram, mangled, null);
 		if (!demangledObjs.isEmpty()) {
@@ -1039,6 +1039,58 @@ public abstract class GhidraScript extends FlatProgramAPI {
 
 		if (writer != null) {
 			writer.println(decorateOutput ? decoratedMessage : message);
+		}
+	}
+
+	/**
+	 * Prints the {@link #decorateOutput optionally} {@link #decorate(String) decorated} message
+	 * followed by a line feed to this script's {@code stdout} {@link PrintWriter}, which is set by 
+	 * {@link #set(GhidraState, ScriptControls)}.
+	 * <p>
+	 * Additionally, the always {@link #decorate(String) decorated} message is written to Ghidra's 
+	 * log.
+	 *
+	 * @param message the message to print
+	 * @param color the color for the text
+	 */
+	public void println(String message, Color color) {
+
+		String decoratedMessage = decorate(message);
+
+		Msg.info(GhidraScript.class, new ScriptMessage(decoratedMessage));
+
+		if (writer instanceof DecoratingPrintWriter scriptWriter) {
+			scriptWriter.println(decorateOutput ? decoratedMessage : message, color);
+			return;
+		}
+
+		if (writer != null) {
+			writer.println(decorateOutput ? decoratedMessage : message);
+		}
+	}
+
+	/**
+	 * Prints the undecorated message with no newline to this script's {@code stdout} 
+	 * {@link PrintWriter}, which is set by {@link #set(GhidraState, ScriptControls)}.
+	 * <p>
+	 * Additionally, the undecorated message is written to Ghidra's log.
+	 *
+	 * @param message the message to print
+	 * @param color the color for the text
+	 */
+	public void print(String message, Color color) {
+
+		String decoratedMessage = decorate(message);
+
+		Msg.info(GhidraScript.class, new ScriptMessage(decoratedMessage));
+
+		if (writer instanceof DecoratingPrintWriter scriptWriter) {
+			scriptWriter.print(decorateOutput ? decoratedMessage : message, color);
+			return;
+		}
+
+		if (writer != null) {
+			writer.print(decorateOutput ? decoratedMessage : message);
 		}
 	}
 
@@ -1910,7 +1962,7 @@ public abstract class GhidraScript extends FlatProgramAPI {
 	private <T> T loadAskValue(T defaultValue, StringTransformer<T> transformer, String key) {
 
 		boolean isHeadless = isRunningHeadless();
-		if (isHeadless && scriptArgs.length > 0) {
+		if (scriptArgs.length > 0) {
 			// this will throw IllegalArgumenrException if the args cannot be parsed
 			return transformer.apply(nextScriptArg());
 		}
@@ -2827,8 +2879,10 @@ public abstract class GhidraScript extends FlatProgramAPI {
 		DomainFile choice = loadAskValue(this::parseDomainFile, title);
 		if (!isRunningHeadless()) {
 			choice = doAsk(Program.class, title, "", choice, lastValue -> {
-
-				DataTreeDialog dtd = new DataTreeDialog(null, title, OPEN);
+				// File filter employed limits access to program files within the active project
+				// only to ensure the ability to open for update is possible. 
+				DataTreeDialog dtd = new DataTreeDialog(null, title, OPEN,
+					new DefaultDomainFileFilter(Program.class, true));
 				dtd.show();
 				if (dtd.wasCancelled()) {
 					return null;
@@ -2932,8 +2986,10 @@ public abstract class GhidraScript extends FlatProgramAPI {
 
 		String message = "";
 		DomainFile choice = doAsk(DomainFile.class, title, message, existingValue, lastValue -> {
-
-			DataTreeDialog dtd = new DataTreeDialog(null, title, OPEN);
+			// File filter employed limits access to files within the active project
+			// only to ensure the ability to open for update is possible. 
+			DataTreeDialog dtd = new DataTreeDialog(null, title, OPEN,
+				DomainFileFilter.ALL_FILES_NO_EXTERNAL_FOLDERS_FILTER);
 			dtd.show();
 			if (dtd.wasCancelled()) {
 				throw new CancelledException();

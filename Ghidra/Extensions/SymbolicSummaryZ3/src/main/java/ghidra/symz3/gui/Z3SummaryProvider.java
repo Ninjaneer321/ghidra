@@ -15,8 +15,10 @@
  */
 package ghidra.symz3.gui;
 
-import java.awt.BorderLayout;
+import java.awt.*;
+import java.util.List;
 import java.util.Objects;
+import java.util.stream.Stream;
 
 import javax.swing.*;
 
@@ -30,20 +32,21 @@ import ghidra.app.services.DebuggerEmulationService.CachedEmulator;
 import ghidra.app.services.DebuggerEmulationService.EmulatorStateListener;
 import ghidra.app.services.DebuggerTraceManagerService;
 import ghidra.app.util.pcode.StringPcodeFormatter;
-import ghidra.debug.api.emulation.DebuggerPcodeEmulatorFactory;
-import ghidra.debug.api.emulation.DebuggerPcodeMachine;
+import ghidra.debug.api.emulation.EmulatorFactory;
 import ghidra.debug.api.tracemgr.DebuggerCoordinates;
 import ghidra.framework.options.AutoOptions;
 import ghidra.framework.plugintool.AutoService;
 import ghidra.framework.plugintool.ComponentProviderAdapter;
 import ghidra.framework.plugintool.annotation.AutoServiceConsumed;
-import ghidra.pcode.emu.symz3.full.SymZ3DebuggerPcodeEmulator;
-import ghidra.pcode.emu.symz3.full.SymZ3DebuggerPcodeEmulatorFactory;
+import ghidra.pcode.emu.PcodeMachine;
+import ghidra.pcode.emu.symz3.SymZ3EmulatorFactory;
 import ghidra.pcode.emu.symz3.lib.Z3InfixPrinter;
+import ghidra.pcode.emu.symz3.state.SymZ3PcodeEmulator;
 import ghidra.program.model.address.Address;
 import ghidra.program.util.ProgramLocation;
 import ghidra.trace.model.Trace;
 import ghidra.trace.model.time.schedule.TraceSchedule;
+import ghidra.util.Msg;
 
 public class Z3SummaryProvider extends ComponentProviderAdapter {
 
@@ -63,11 +66,9 @@ public class Z3SummaryProvider extends ComponentProviderAdapter {
 	private final EmulatorStateListener emuListener = new EmulatorStateListener() {
 		@Override
 		public void stopped(CachedEmulator emu) {
-			if (!(emu.emulator() instanceof SymZ3DebuggerPcodeEmulator z3emu)) {
-				setFactoryToZ3();
-				return;
+			if (emu.emulator() instanceof SymZ3PcodeEmulator z3emu) {
+				populateSummaryFromEmulator(z3emu);
 			}
-			populateSummaryFromEmulator(z3emu);
 		}
 	};
 
@@ -89,8 +90,9 @@ public class Z3SummaryProvider extends ComponentProviderAdapter {
 	String style = "<html>";
 
 	JPanel mainPanel = new JPanel(new BorderLayout());
-	JSplitPane submainPanel = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
+	JSplitPane summaryPanel = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
 	JSplitPane codePanel = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
+	JPanel fixPanel = new JPanel(new GridBagLayout());
 
 	Z3SummaryInformationPanel information;
 	Z3SummaryPcodeLogPanel ops;
@@ -121,14 +123,30 @@ public class Z3SummaryProvider extends ComponentProviderAdapter {
 		ops = new Z3SummaryPcodeLogPanel(this);
 		instructions = new Z3SummaryInstructionLogPanel(this);
 
-		JPanel summaryPanel = new JPanel(new BorderLayout());
-		summaryPanel.add(new JScrollPane(information));
 		codePanel.setTopComponent(instructions);
 		codePanel.setBottomComponent(ops);
 		codePanel.setDividerLocation(0.4);
-		submainPanel.setRightComponent(summaryPanel);
-		submainPanel.setLeftComponent(codePanel);
-		mainPanel.add(submainPanel);
+		summaryPanel.setRightComponent(instructions);
+		summaryPanel.setLeftComponent(codePanel);
+		mainPanel.add(summaryPanel);
+
+		GridBagConstraints gbc = new GridBagConstraints();
+		gbc.gridwidth = GridBagConstraints.REMAINDER;
+		gbc.anchor = GridBagConstraints.NORTH;
+		fixPanel.add(new JLabel("""
+				<html>
+				<h1>Z3 Emulator is not active</h1>
+				<p>Press the button below to configure this tool for %s</p>""".formatted(
+			SymZ3EmulatorFactory.TITLE)));
+		JPanel buttons = new JPanel(new GridBagLayout());
+		gbc.anchor = GridBagConstraints.CENTER;
+		gbc.fill = GridBagConstraints.HORIZONTAL;
+
+		JButton buttonFix = new JButton("Fix");
+		buttonFix.addActionListener(evt -> setFactoryToZ3());
+		buttons.add(buttonFix);
+		gbc.weighty = 1;
+		fixPanel.add(buttons, gbc);
 	}
 
 	public void updateSummary() {
@@ -145,27 +163,52 @@ public class Z3SummaryProvider extends ComponentProviderAdapter {
 		}
 
 		TraceSchedule time = current.getTime();
-		DebuggerPcodeMachine<?> emu = emulationService.getCachedEmulator(trace, time);
-		if (!(emu instanceof SymZ3DebuggerPcodeEmulator z3Emu)) {
-			/** LATER: It'd be nice if the summary were written down somewhere */
-			setFactoryToZ3();
+		PcodeMachine<?> emu = emulationService.getCachedEmulator(trace, time);
+		if (emu instanceof SymZ3PcodeEmulator z3Emu) {
+			populateSummaryFromEmulator(z3Emu);
+			ensureMainPanel(summaryPanel);
+		}
+		else {
+			clearSummary();
+			ensureMainPanel(fixPanel);
+		}
+	}
+
+	private static boolean contains(Container container, Component component) {
+		int count = container.getComponentCount();
+		for (int i = 0; i < count; i++) {
+			if (container.getComponent(i) == component) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private void ensureMainPanel(Component component) {
+		if (contains(mainPanel, component)) {
 			return;
 		}
-
-		populateSummaryFromEmulator(z3Emu);
+		mainPanel.removeAll();
+		mainPanel.add(component);
 	}
 
 	private void setFactoryToZ3() {
-		for (DebuggerPcodeEmulatorFactory factory : emulationService.getEmulatorFactories()) {
-			if (factory instanceof SymZ3DebuggerPcodeEmulatorFactory z3factory) {
+		Msg.info(this, "Resetting emulator to Z3 (summary open)");
+		for (EmulatorFactory factory : emulationService.getEmulatorFactories()) {
+			if (factory instanceof SymZ3EmulatorFactory z3factory) {
 				emulationService.setEmulatorFactory(z3factory);
-				emulationService.invalidateCache();
 				return;
 			}
 		}
 	}
 
-	public void populateSummaryFromEmulator(SymZ3DebuggerPcodeEmulator emu) {
+	public void clearSummary() {
+		information.setInformation(Stream.of(), Stream.of());
+		ops.setLog(List.of());
+		instructions.setLog(List.of());
+	}
+
+	public void populateSummaryFromEmulator(SymZ3PcodeEmulator emu) {
 		try (Context ctx = new Context()) {
 			Z3InfixPrinter z3p = new Z3InfixPrinter(ctx);
 			information.setInformation(emu.streamValuations(ctx, z3p),

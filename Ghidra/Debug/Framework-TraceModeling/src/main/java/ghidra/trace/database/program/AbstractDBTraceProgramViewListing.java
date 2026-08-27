@@ -20,7 +20,8 @@ import java.util.*;
 
 import org.apache.commons.collections4.IteratorUtils;
 
-import generic.NestedIterator;
+import generic.util.FlattenedIterator;
+import generic.util.MergeSortingIterator;
 import ghidra.program.database.ProgramDB;
 import ghidra.program.database.code.InstructionDB;
 import ghidra.program.database.function.OverlappingFunctionException;
@@ -40,8 +41,8 @@ import ghidra.trace.database.memory.DBTraceMemorySpace;
 import ghidra.trace.database.program.DBTraceProgramViewMemory.RegionEntry;
 import ghidra.trace.model.*;
 import ghidra.trace.model.listing.*;
+import ghidra.trace.model.memory.TraceMemoryOperations.StatePredicate;
 import ghidra.trace.model.memory.TraceMemoryRegion;
-import ghidra.trace.model.memory.TraceMemoryState;
 import ghidra.trace.model.program.TraceProgramView;
 import ghidra.trace.model.program.TraceProgramViewListing;
 import ghidra.trace.model.property.TracePropertyMapOperations;
@@ -348,7 +349,7 @@ public abstract class AbstractDBTraceProgramViewListing implements TraceProgramV
 		}
 		// TODO: The property map doesn't heed forking.
 		return new WrappingCodeUnitIterator(
-			NestedIterator
+			FlattenedIterator
 					.start(map.getAddressSetView(Lifespan.at(program.snap)).iterator(forward),
 						rng -> getTopCodeIterator(
 							s -> codeOperations.codeUnits().get(s, rng, forward).iterator(),
@@ -371,7 +372,7 @@ public abstract class AbstractDBTraceProgramViewListing implements TraceProgramV
 		}
 		// TODO: The property map doesn't heed forking.
 		return new WrappingCodeUnitIterator(
-			NestedIterator
+			FlattenedIterator
 					.start(map.getAddressSetView(Lifespan.at(program.snap)).iterator(addr, forward),
 						rng -> getTopCodeIterator(
 							s -> codeOperations.codeUnits().get(s, rng, forward).iterator(),
@@ -394,7 +395,7 @@ public abstract class AbstractDBTraceProgramViewListing implements TraceProgramV
 			return new WrappingCodeUnitIterator(Collections.emptyIterator());
 		}
 		// TODO: The property map doesn't heed forking.
-		return new WrappingCodeUnitIterator(NestedIterator.start(
+		return new WrappingCodeUnitIterator(FlattenedIterator.start(
 			new IntersectionAddressSetView(map.getAddressSetView(Lifespan.at(program.snap)),
 				addrSet).iterator(forward),
 			rng -> getTopCodeIterator(
@@ -688,24 +689,6 @@ public abstract class AbstractDBTraceProgramViewListing implements TraceProgramV
 	}
 
 	@Override
-	public DataIterator getCompositeData(boolean forward) {
-		// TODO Auto-generated method stub
-		return null;
-	}
-
-	@Override
-	public DataIterator getCompositeData(Address start, boolean forward) {
-		// TODO Auto-generated method stub
-		return null;
-	}
-
-	@Override
-	public DataIterator getCompositeData(AddressSetView addrSet, boolean forward) {
-		// TODO Auto-generated method stub
-		return null;
-	}
-
-	@Override
 	public Iterator<String> getUserDefinedProperties() {
 		// TODO Auto-generated method stub
 		return null;
@@ -738,7 +721,7 @@ public abstract class AbstractDBTraceProgramViewListing implements TraceProgramV
 			throw new CodeUnitInsertionException("Code unit would extend beyond address space");
 		}
 		var mostRecent = program.memory.memoryManager.getViewMostRecentStateEntry(program.snap,
-			range, s -> s == TraceMemoryState.KNOWN);
+			range, StatePredicate.IS_KNOWN);
 		long snap = mostRecent == null ? program.snap : mostRecent.getKey().getY2();
 		return codeOperations.instructions()
 				.create(Lifespan.nowOn(snap), addr, program.platform, prototype, context,

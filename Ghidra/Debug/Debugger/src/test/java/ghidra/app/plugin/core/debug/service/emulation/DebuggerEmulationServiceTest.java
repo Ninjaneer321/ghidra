@@ -38,11 +38,12 @@ import ghidra.app.plugin.core.debug.service.platform.DebuggerPlatformServicePlug
 import ghidra.app.services.DebuggerEmulationService.EmulationResult;
 import ghidra.app.services.DebuggerStaticMappingService;
 import ghidra.app.services.DebuggerTraceManagerService.ActivationCause;
-import ghidra.debug.api.emulation.DebuggerPcodeMachine;
+import ghidra.debug.api.emulation.PcodeDebuggerAccess;
 import ghidra.debug.api.platform.DebuggerPlatformMapper;
 import ghidra.debug.api.tracemgr.DebuggerCoordinates;
-import ghidra.pcode.emu.PcodeThread;
+import ghidra.pcode.emu.*;
 import ghidra.pcode.exec.*;
+import ghidra.pcode.exec.trace.TraceEmulationIntegration.Writer;
 import ghidra.pcode.utils.Utils;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSpace;
@@ -52,9 +53,10 @@ import ghidra.program.model.listing.ProgramContext;
 import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.util.ProgramLocation;
+import ghidra.trace.database.ToyDBTraceBuilder;
 import ghidra.trace.database.ToyDBTraceBuilder.ToySchemaBuilder;
 import ghidra.trace.model.*;
-import ghidra.trace.model.breakpoint.TraceBreakpointKind;
+import ghidra.trace.model.breakpoint.TraceBreakpointKind.CommonSet;
 import ghidra.trace.model.breakpoint.TraceBreakpointLocation;
 import ghidra.trace.model.guest.TracePlatform;
 import ghidra.trace.model.memory.TraceMemoryManager;
@@ -448,7 +450,7 @@ public class DebuggerEmulationServiceTest extends AbstractGhidraHeadedDebuggerTe
 		try (Transaction tx = trace.openTransaction("Add breakpoint")) {
 			trace.getBreakpointManager()
 					.addBreakpoint("Breakpoints[0]", Lifespan.nowOn(0), addrI2, Set.of(thread),
-						Set.of(TraceBreakpointKind.SW_EXECUTE), true, "test");
+						CommonSet.SWX.kinds(), true, "test");
 		}
 
 		EmulationResult result = emulationPlugin.run(trace.getPlatformManager().getHostPlatform(),
@@ -506,10 +508,10 @@ public class DebuggerEmulationServiceTest extends AbstractGhidraHeadedDebuggerTe
 		try (Transaction tx = trace.openTransaction("Add breakpoint")) {
 			trace.getBreakpointManager()
 					.addBreakpoint("Breakpoints[0]", Lifespan.nowOn(0), addrText, Set.of(thread),
-						Set.of(TraceBreakpointKind.SW_EXECUTE), true, "test");
+						CommonSet.SWX.kinds(), true, "test");
 			TraceBreakpointLocation tb = trace.getBreakpointManager()
 					.addBreakpoint("Breakpoints[1]", Lifespan.nowOn(0), addrI1, Set.of(thread),
-						Set.of(TraceBreakpointKind.SW_EXECUTE), true, "test");
+						CommonSet.SWX.kinds(), true, "test");
 			// Force "partial instruction"
 			tb.setEmuSleigh(0, """
 					r1 = 0xbeef;
@@ -518,7 +520,7 @@ public class DebuggerEmulationServiceTest extends AbstractGhidraHeadedDebuggerTe
 					""");
 			trace.getBreakpointManager()
 					.addBreakpoint("Breakpoints[2]", Lifespan.nowOn(0), addrI2, Set.of(thread),
-						Set.of(TraceBreakpointKind.SW_EXECUTE), true, "test");
+						CommonSet.SWX.kinds(), true, "test");
 		}
 
 		assertEquals(0, emulationPlugin.cache.size());
@@ -533,7 +535,7 @@ public class DebuggerEmulationServiceTest extends AbstractGhidraHeadedDebuggerTe
 		assertTrue(result1.error() instanceof InterruptPcodeExecutionException);
 
 		// Save this for comparison later
-		DebuggerPcodeMachine<?> emu = Unique.assertOne(emulationPlugin.cache.values()).emulator();
+		PcodeMachine<?> emu = Unique.assertOne(emulationPlugin.cache.values()).emulator();
 
 		// This will test if the one just hit gets ignored
 		EmulationResult result2 = emulationPlugin.run(trace.getPlatformManager().getHostPlatform(),
@@ -580,10 +582,10 @@ public class DebuggerEmulationServiceTest extends AbstractGhidraHeadedDebuggerTe
 		try (Transaction tx = trace.openTransaction("Add breakpoint")) {
 			trace.getBreakpointManager()
 					.addBreakpoint("Breakpoints[0]", Lifespan.nowOn(0), addrText, Set.of(thread),
-						Set.of(TraceBreakpointKind.SW_EXECUTE), true, "test");
+						CommonSet.SWX.kinds(), true, "test");
 			TraceBreakpointLocation tb = trace.getBreakpointManager()
 					.addBreakpoint("Breakpoints[1]", Lifespan.nowOn(0), addrI1, Set.of(thread),
-						Set.of(TraceBreakpointKind.SW_EXECUTE), true, "test");
+						CommonSet.SWX.kinds(), true, "test");
 			// Force "partial instruction"
 			tb.setEmuSleigh(0, """
 					r1 = 0xbeef;
@@ -604,7 +606,7 @@ public class DebuggerEmulationServiceTest extends AbstractGhidraHeadedDebuggerTe
 		assertTrue(result1.error() instanceof InterruptPcodeExecutionException);
 
 		// Save this for comparison later
-		DebuggerPcodeMachine<?> emu = Unique.assertOne(emulationPlugin.cache.values()).emulator();
+		PcodeMachine<?> emu = Unique.assertOne(emulationPlugin.cache.values()).emulator();
 
 		// Now, step it forward to complete the instruction
 		emulationPlugin.emulate(trace.getPlatformManager().getHostPlatform(),
@@ -649,7 +651,7 @@ public class DebuggerEmulationServiceTest extends AbstractGhidraHeadedDebuggerTe
 		try (Transaction tx = trace.openTransaction("Add breakpoint")) {
 			TraceBreakpointLocation tb = trace.getBreakpointManager()
 					.addBreakpoint("Breakpoints[1]", Lifespan.nowOn(0), addrI1, Set.of(thread),
-						Set.of(TraceBreakpointKind.SW_EXECUTE), true, "test");
+						CommonSet.SWX.kinds(), true, "test");
 			// Force "partial instruction"
 			tb.setEmuSleigh(0, """
 					r1 = 0xbeef;
@@ -671,7 +673,7 @@ public class DebuggerEmulationServiceTest extends AbstractGhidraHeadedDebuggerTe
 		assertTrue(result1.error() instanceof PcodeExecutionException);
 
 		// Save this for comparison later
-		DebuggerPcodeMachine<?> emu = Unique.assertOne(emulationPlugin.cache.values()).emulator();
+		PcodeMachine<?> emu = Unique.assertOne(emulationPlugin.cache.values()).emulator();
 
 		// We shouldn't get any further
 		EmulationResult result2 = emulationPlugin.run(trace.getPlatformManager().getHostPlatform(),
@@ -724,7 +726,7 @@ public class DebuggerEmulationServiceTest extends AbstractGhidraHeadedDebuggerTe
 		try (Transaction tx = trace.openTransaction("Add breakpoint")) {
 			TraceBreakpointLocation tb = trace.getBreakpointManager()
 					.addBreakpoint("Breakpoints[0]", Lifespan.nowOn(0), addrI2, Set.of(thread),
-						Set.of(TraceBreakpointKind.SW_EXECUTE), true, "test");
+						CommonSet.SWX.kinds(), true, "test");
 			tb.setEmuSleigh(0, """
 					r1 = 0x5678;
 					emu_swi();
@@ -791,7 +793,7 @@ public class DebuggerEmulationServiceTest extends AbstractGhidraHeadedDebuggerTe
 		try (Transaction tx = trace.openTransaction("Add breakpoint")) {
 			trace.getBreakpointManager()
 					.addBreakpoint("Breakpoints[0]", Lifespan.nowOn(0), addr(trace, 0x1234),
-						Set.of(thread), Set.of(TraceBreakpointKind.READ), true, "test");
+						Set.of(thread), CommonSet.READ.kinds(), true, "test");
 		}
 
 		EmulationResult result = emulationPlugin.run(trace.getPlatformManager().getHostPlatform(),
@@ -869,7 +871,7 @@ public class DebuggerEmulationServiceTest extends AbstractGhidraHeadedDebuggerTe
 		try (Transaction tx = trace.openTransaction("Add breakpoint")) {
 			TraceBreakpointLocation tb = trace.getBreakpointManager()
 					.addBreakpoint("Breakpoints[0]", Lifespan.nowOn(0), addrI2, Set.of(thread),
-						Set.of(TraceBreakpointKind.SW_EXECUTE), true, "test");
+						CommonSet.SWX.kinds(), true, "test");
 			tb.setEmuSleigh(0, """
 					r1 = 0x5678;
 					emu_exec_decoded();
@@ -979,12 +981,13 @@ public class DebuggerEmulationServiceTest extends AbstractGhidraHeadedDebuggerTe
 			TracePlatform host = tb.trace.getPlatformManager().getHostPlatform();
 			DefaultPcodeDebuggerAccess access =
 				new DefaultPcodeDebuggerAccess(tool, null, host, restartEmuSnap);
-			BytesDebuggerPcodeEmulator emulator = new BytesDebuggerPcodeEmulator(access);
+			Writer writer = DebuggerEmulationIntegration.bytesDelayedWriteTrace(access);
+			PcodeEmulator emulator = new PcodeEmulator(access.getLanguage(), writer.callbacks());
 
 			TraceSnapshot snapshot =
 				tb.trace.getTimeManager().createSnapshot("created new emulator thread");
 			long newSnap = snapshot.getKey();
-			emulator.writeDown(host, newSnap, newSnap);
+			writer.writeDown(newSnap);
 
 			TraceThread newTraceThread = ProgramEmulationUtils.doLaunchEmulationThread(tb.trace,
 				newSnap, program, tb.addr(0x00400000), addr(program, 0x00400000));
@@ -1004,5 +1007,81 @@ public class DebuggerEmulationServiceTest extends AbstractGhidraHeadedDebuggerTe
 
 		PathFilter stackFilter = threadSchema.searchFor(TraceStack.class, false);
 		assertNotNull("Non-unique Stack", stackFilter.getSingletonPath());
+	}
+
+	/**
+	 * Tests that debugger-integrated emulators will read through to the mapped program(s) when
+	 * appropriate.
+	 * <p>
+	 * In this test, the case where bytes are read through is tested by virtue of instruction
+	 * decode. The emulator will ask for bytes from the state, the state will examine the trace and
+	 * eventually ask to have those bytes copied in from the mapped program, resulting in
+	 * successfully decoded instructions as assembled into the program.
+	 * <p>
+	 * The case where bytes MUST NOT be read through is tested via the load instruction, where we've
+	 * placed bytes into the trace itself at snapshot 0. The access object is set to source bytes
+	 * from snapshot 1. Even though the bytes are only KNOWN in snapshot 0, that's still "more
+	 * recent" than the static images, so we should get the trace bytes, not the static image bytes.
+	 * 
+	 * @throws Exception because
+	 */
+	@Test
+	public void testReadFromStatic() throws Exception {
+		createProgram();
+		intoProject(program);
+
+		Assembler asm = Assemblers.getAssembler(program);
+		Memory memory = program.getMemory();
+		Address addrText = addr(program, 0x00400000);
+		Address addrData = addr(program, 0x00000000);
+		Register regR0 = program.getRegister("r0");
+		try (Transaction tx = program.openTransaction("Initialize")) {
+			MemoryBlock blockText = memory.createInitializedBlock(".text", addrText, 0x1000,
+				(byte) 0, monitor, false);
+			blockText.setExecute(true);
+			asm.assemble(addrText,
+				"imm r0, #0x100",
+				"load r0, [r0]");
+			MemoryBlock blockData = memory.createInitializedBlock(".data", addrData, 0x1000,
+				(byte) 0, monitor, false);
+			blockData.putBytes(addr(program, 0x0100), arr("deadbeefcafeface"));
+		}
+
+		programManager.openProgram(program);
+		waitForSwing();
+
+		Trace trace = null;
+		try {
+			trace = ProgramEmulationUtils.launchEmulationTrace(program, addrText, this);
+			tb = new ToyDBTraceBuilder(trace);
+		}
+		finally {
+			if (trace != null) {
+				trace.release(this);
+			}
+		}
+
+		traceManager.openTrace(trace);
+		waitForSwing();
+
+		try (Transaction tx = tb.startTransaction()) {
+			TraceSnapshot snapshot = tb.trace.getTimeManager().getSnapshot(0, true);
+			long snap = snapshot.getKey();
+
+			tb.trace.getMemoryManager()
+					.putBytes(snap, tb.addr(0x0100), ByteBuffer.wrap(arr("600dbeef12345678")));
+		}
+
+		// Set access at one snap later
+		PcodeDebuggerAccess access = new DefaultPcodeDebuggerAccess(tool, null, tb.host, 1);
+		Writer writer = DebuggerEmulationIntegration.bytesDelayedWriteTrace(access);
+		PcodeEmulator emu = new PcodeEmulator(access.getLanguage(), writer.callbacks());
+		TraceThread traceThread = Unique.assertOne(tb.trace.getThreadManager().getAllThreads());
+		PcodeThread<byte[]> thread = emu.getThread(traceThread.getPath(), true);
+
+		thread.stepInstruction(2);
+
+		RegisterValue rv = thread.getState().inspectRegisterValue(regR0);
+		assertEquals("600dbeef12345678", rv.getUnsignedValue().toString(16));
 	}
 }

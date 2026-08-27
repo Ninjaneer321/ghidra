@@ -320,7 +320,7 @@ void LanedRegister::LanedIterator::normalize(void)
     s.unsetf(ios::dec | ios::hex | ios::oct);
     int4 sz = -1;
     s >> sz;
-    if (sz < 0 || sz > 16)
+    if (sz <= 0 || sz >= wholeSize || sz > 16)
       throw LowlevelError("Bad lane size: " + value);
     addLaneSize(sz);
   }
@@ -452,8 +452,14 @@ TransformVar *TransformManager::newSplit(Varnode *vn,const LaneDescription &desc
     int4 bitpos = description.getPosition(i) * 8;
     TransformVar *newVar = &res[i];
     int4 byteSize = description.getSize(i);
-    if (vn->isConstant())
-      newVar->initialize(TransformVar::constant,vn,byteSize * 8,byteSize, (vn->getOffset() >> bitpos) & calc_mask(byteSize));
+    if (vn->isConstant()) {
+      uintb val;
+      if (bitpos < sizeof(uintb)*8)
+	val = (vn->getOffset() >> bitpos) & calc_mask(byteSize);
+      else
+	val = 0;	// Assume bits beyond precision are 0
+      newVar->initialize(TransformVar::constant,vn,byteSize * 8,byteSize, val);
+    }
     else {
       uint4 type = preserveAddress(vn, byteSize * 8, bitpos) ? TransformVar::piece : TransformVar::piece_temp;
       newVar->initialize(type,vn,byteSize * 8, byteSize, bitpos);
@@ -482,8 +488,14 @@ TransformVar *TransformManager::newSplit(Varnode *vn,const LaneDescription &desc
     int4 bitpos = description.getPosition(startLane + i) * 8 - baseBitPos;
     int4 byteSize = description.getSize(startLane + i);
     TransformVar *newVar = &res[i];
-    if (vn->isConstant())
-      newVar->initialize(TransformVar::constant,vn,byteSize * 8, byteSize, (vn->getOffset() >> bitpos) & calc_mask(byteSize));
+    if (vn->isConstant()) {
+      uintb val;
+      if (bitpos < sizeof(uintb)*8)
+	val = (vn->getOffset() >> bitpos) & calc_mask(byteSize);
+      else
+	val = 0;	// Assume bits beyond precision are 0
+      newVar->initialize(TransformVar::constant,vn,byteSize * 8, byteSize, val);
+    }
     else {
       uint4 type = preserveAddress(vn, byteSize * 8, bitpos) ? TransformVar::piece : TransformVar::piece_temp;
       newVar->initialize(type,vn,byteSize * 8, byteSize, bitpos);

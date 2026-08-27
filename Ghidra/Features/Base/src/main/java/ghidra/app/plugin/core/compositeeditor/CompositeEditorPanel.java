@@ -43,6 +43,7 @@ import docking.widgets.label.GLabel;
 import docking.widgets.table.*;
 import docking.widgets.textfield.GValidatedTextField;
 import generic.theme.GColor;
+import generic.timer.ExpiringSwingTimer;
 import ghidra.app.util.datatype.DataTypeSelectionEditor;
 import ghidra.app.util.datatype.NavigationDirection;
 import ghidra.framework.plugintool.Plugin;
@@ -246,6 +247,7 @@ public abstract class CompositeEditorPanel<T extends Composite, M extends Compos
 		}
 
 		table.getSelectionModel().setSelectionInterval(row, row);
+		showSelectedRow();
 	}
 
 	private int findRowForFieldName(String fieldName) {
@@ -258,8 +260,8 @@ public abstract class CompositeEditorPanel<T extends Composite, M extends Compos
 				if (Objects.equals(fieldName, dtcFieldName)) {
 					return row;
 				}
-				String defaultName = dtc.getDefaultFieldName();
-				if (Objects.equals(fieldName, defaultName)) {
+
+				if (dtc.isDefaultFieldName(fieldName)) {
 					return row;
 				}
 			}
@@ -546,6 +548,15 @@ public abstract class CompositeEditorPanel<T extends Composite, M extends Compos
 		table.dispose();
 	}
 
+	private void showSelectedRow() {
+		if (table.isShowing()) {
+			table.scrollToSelectedRow();
+		}
+		else {
+			ExpiringSwingTimer.runWhen(() -> table.isShowing(), table::scrollToSelectedRow);
+		}
+	}
+
 	private void createTable() {
 		table = new CompositeEditorTable(model);
 
@@ -566,10 +577,8 @@ public abstract class CompositeEditorPanel<T extends Composite, M extends Compos
 			if (e.getValueIsAdjusting()) {
 				return;
 			}
+
 			model.setSelection(table.getSelectedRows());
-			if (table.getAutoscrolls()) {
-				table.scrollToSelectedRow();
-			}
 		});
 
 		table.getColumnModel().getSelectionModel().addListSelectionListener(e -> {
@@ -933,13 +942,20 @@ public abstract class CompositeEditorPanel<T extends Composite, M extends Compos
 
 	@Override
 	public void statusChanged(String message, boolean beep) {
-		if ((message == null) || (message.length() == 0)) {
+		if (StringUtils.isBlank(message)) {
 			message = " ";
 		}
+
 		setStatus(message);
 		if (beep) {
 			getToolkit().beep();
 		}
+	}
+
+	protected void goToRow(int row) {
+		table.getSelectionModel().setSelectionInterval(row, row);
+		Rectangle cellRect = table.getCellRect(row, 0, true);
+		table.scrollRectToVisible(cellRect);
 	}
 
 	void search(String searchText, boolean forward) {
@@ -947,11 +963,8 @@ public abstract class CompositeEditorPanel<T extends Composite, M extends Compos
 		Integer row = forward ? findForward(searchText) : findBackward(searchText);
 
 		if (row != null) {
-			table.getSelectionModel().setSelectionInterval(row, row);
-			Rectangle cellRect = table.getCellRect(row, 0, true);
-			table.scrollRectToVisible(cellRect);
+			goToRow(row);
 		}
-
 	}
 
 	private Integer findForward(String text) {
@@ -1076,6 +1089,10 @@ public abstract class CompositeEditorPanel<T extends Composite, M extends Compos
 		clsm.setSelectionInterval(viewColumn, viewColumn);
 	}
 
+//=================================================================================================
+// Inner Classes
+//=================================================================================================	
+
 	private class ComponentStringCellEditor extends ComponentCellEditor {
 		public ComponentStringCellEditor(JTextField textField) {
 			super(textField);
@@ -1136,8 +1153,8 @@ public abstract class CompositeEditorPanel<T extends Composite, M extends Compos
 		@Override
 		public boolean stopCellEditing() {
 			try {
-				model.validateComponentName(table.getEditingRow(),
-					((JTextComponent) getComponent()).getText());
+				String newName = ((JTextComponent) getComponent()).getText();
+				model.validateComponentName(table.getEditingRow(), newName);
 				fireEditingStopped();
 				return true;
 			}
@@ -1529,5 +1546,6 @@ public abstract class CompositeEditorPanel<T extends Composite, M extends Compos
 		}
 
 	}
+
 
 }

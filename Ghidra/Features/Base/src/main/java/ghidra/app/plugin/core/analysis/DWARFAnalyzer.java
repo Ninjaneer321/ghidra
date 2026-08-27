@@ -45,8 +45,7 @@ public class DWARFAnalyzer extends AbstractAnalyzer {
 	 */
 	public static boolean isAlreadyImported(Program program) {
 		Options options = program.getOptions(Program.PROGRAM_INFO);
-		return options.getBoolean(DWARF_LOADED_OPTION_NAME, false) ||
-			oldCheckIfDWARFImported(program);
+		return options.getBoolean(DWARF_LOADED_OPTION_NAME, false);
 	}
 
 	private DWARFImportOptions importOptions = new DWARFImportOptions();
@@ -101,7 +100,7 @@ public class DWARFAnalyzer extends AbstractAnalyzer {
 				extDFSI.importSymbols(log);
 			}
 
-			try (DWARFProgram prog = new DWARFProgram(program, importOptions, monitor, dsp)) {
+			try (DWARFProgram prog = new DWARFProgram(program, importOptions, dsp)) {
 				if (prog.getRegisterMappings() == null && importOptions.isImportFuncs()) {
 					log.appendMsg("No DWARF to Ghidra register mappings found for this program's " +
 						"language [%s], function information may be incorrect / incomplete."
@@ -121,20 +120,15 @@ public class DWARFAnalyzer extends AbstractAnalyzer {
 		catch (CancelledException ce) {
 			throw ce;
 		}
+		catch (DWARFException e) {
+			log.appendMsg("Error during DWARFAnalyzer import: " + e.getMessage());
+			Msg.error(this, "Error during DWARFAnalyzer import: " + e.getMessage());
+		}
 		catch (IOException e) {
 			log.appendMsg("Error during DWARFAnalyzer import: " + e);
 			Msg.error(this, "Error during DWARFAnalyzer import: ", e);
 		}
 		return false;
-	}
-
-
-	@Deprecated(forRemoval = true, since = "10.0")
-	private static boolean oldCheckIfDWARFImported(Program prog) {
-		// this was the old way of checking if the DWARF analyzer had already been run.  Keep
-		// it around for a little bit so existing programs that have already imported DWARF data
-		// don't get re-run.  Remove after a release or two. 
-		return DWARFFunctionImporter.hasDWARFProgModule(prog, DWARFProgram.DWARF_ROOT_NAME);
 	}
 
 	@Override

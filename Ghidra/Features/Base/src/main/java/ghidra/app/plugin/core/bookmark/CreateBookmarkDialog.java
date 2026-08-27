@@ -61,7 +61,7 @@ public class CreateBookmarkDialog extends DialogComponentProvider {
 
 		initializeDescription(cu);
 
-		setFocusComponent(categoryComboBox);
+		setFocusComponent(descriptionTextField);
 		setHelpLocation(new HelpLocation("BookmarkPlugin", "CreateBookmarkDialog"));
 	}
 
@@ -115,7 +115,6 @@ public class CreateBookmarkDialog extends DialogComponentProvider {
 
 		categoryComboBox = new GhidraComboBox<>(getModel());
 		categoryComboBox.setEditable(true);
-		categoryComboBox.setEnterKeyForwarding(true);
 		descriptionTextField = new JTextField(20);
 
 		panel.add(new JLabel("Address: ", SwingConstants.RIGHT));

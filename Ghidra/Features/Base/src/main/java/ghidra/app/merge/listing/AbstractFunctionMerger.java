@@ -23,7 +23,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.event.ChangeEvent;
 import javax.swing.event.ChangeListener;
 
-import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.Strings;
 
 import docking.widgets.dialogs.ReadTextDialog;
 import generic.stl.Pair;
@@ -35,7 +35,6 @@ import ghidra.program.model.address.*;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.symbol.*;
-import ghidra.program.util.DiffUtility;
 import ghidra.program.util.ProgramMerge;
 import ghidra.util.*;
 import ghidra.util.datastruct.ObjectIntHashtable;
@@ -751,10 +750,10 @@ abstract class AbstractFunctionMerger implements ListingMergeConstants {
 			if (!f1Parms[i].isEquivalent(f2Parms[i])) {
 				return false;
 			}
-			if (!StringUtils.equals(f1Parms[i].getName(), f2Parms[i].getName())) {
+			if (!Strings.CS.equals(f1Parms[i].getName(), f2Parms[i].getName())) {
 				return false;
 			}
-			if (!StringUtils.equals(f1Parms[i].getComment(), f2Parms[i].getComment())) {
+			if (!Strings.CS.equals(f1Parms[i].getComment(), f2Parms[i].getComment())) {
 				return false;
 			}
 		}
@@ -2179,8 +2178,9 @@ abstract class AbstractFunctionMerger implements ListingMergeConstants {
 //					new FunctionDetailChangeListener(FUNC_RETURN_TYPE, entryPt, panel, monitor));
 //			}
 			if (((conflicts & FUNC_RETURN_ADDRESS_OFFSET) != 0)) {
-				String latest = DiffUtility.toSignedHexString(latestStack.getReturnAddressOffset());
-				String my = DiffUtility.toSignedHexString(myStack.getReturnAddressOffset());
+				String latest =
+					NumericUtilities.toSignedHexString(latestStack.getReturnAddressOffset());
+				String my = NumericUtilities.toSignedHexString(myStack.getReturnAddressOffset());
 				panel.addSingleChoice("Return Address Offset", new String[] { latest, my },
 					new FunctionDetailChangeListener(FUNC_RETURN_ADDRESS_OFFSET, functions, panel,
 						monitor));
@@ -2202,8 +2202,8 @@ abstract class AbstractFunctionMerger implements ListingMergeConstants {
 //			}
 			if ((conflicts & FUNC_STACK_PURGE_SIZE) != 0) {
 				String latest =
-					DiffUtility.toSignedHexString(functions[LATEST].getStackPurgeSize());
-				String my = DiffUtility.toSignedHexString(functions[MY].getStackPurgeSize());
+					NumericUtilities.toSignedHexString(functions[LATEST].getStackPurgeSize());
+				String my = NumericUtilities.toSignedHexString(functions[MY].getStackPurgeSize());
 				panel.addSingleChoice("Stack Purge Size", new String[] { latest, my },
 					new FunctionDetailChangeListener(FUNC_STACK_PURGE_SIZE, functions, panel,
 						monitor));

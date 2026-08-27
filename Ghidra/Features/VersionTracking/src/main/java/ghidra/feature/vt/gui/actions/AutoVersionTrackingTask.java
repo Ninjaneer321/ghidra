@@ -89,14 +89,9 @@ public class AutoVersionTrackingTask extends Task {
 	/**
 	 * Constructor for a modal/blocking AutoVersionTrackingTask
 	 *
-	
 	 * @param session The Version Tracking session containing the source, destination, correlator
 	 * and match information needed for this command.
 	 * @param toolOptions the options used when applying matches
-	 * @param minCombinedReferenceCorrelatorScore The minimum score used to limit matches created by
-	 * the Combined Reference Correlator.
-	 * @param minCombinedReferenceCorrelatorConfidence The minimum confidence used to limit matches
-	 * created by the Combined Reference Correlator.
 	 */
 	public AutoVersionTrackingTask(VTSession session, ToolOptions toolOptions) {
 		super(NAME, true, true, true);
@@ -299,8 +294,7 @@ public class AutoVersionTrackingTask extends Task {
 					VTAbstractReferenceProgramCorrelatorFactory.SIMILARITY_THRESHOLD, minScore);
 
 				monitor.setPrefix(String.format(prefix, "Data Reference", ++count));
-				hasApplyErrors =
-					hasApplyErrors | correlateAndPossiblyApply(factory, vtOptions, monitor);
+				hasApplyErrors |= correlateAndPossiblyApply(factory, vtOptions, monitor);
 				monitor.doIncrementProgress();
 
 				// Get the number of data and function matches again if this correlator ran
@@ -321,8 +315,7 @@ public class AutoVersionTrackingTask extends Task {
 				factory = new FunctionReferenceProgramCorrelatorFactory();
 
 				monitor.setPrefix(String.format(prefix, "Function Reference", ++count));
-				hasApplyErrors =
-					hasApplyErrors | correlateAndPossiblyApply(factory, vtOptions, monitor);
+				hasApplyErrors |= correlateAndPossiblyApply(factory, vtOptions, monitor);
 				monitor.doIncrementProgress();
 
 				// Get the number of data and function matches again if this correlator ran
@@ -342,8 +335,7 @@ public class AutoVersionTrackingTask extends Task {
 					VTAbstractReferenceProgramCorrelatorFactory.SIMILARITY_THRESHOLD, minScore);
 
 				monitor.setPrefix(String.format(prefix, "Function and Data", ++count));
-				hasApplyErrors =
-					hasApplyErrors | correlateAndPossiblyApply(factory, vtOptions, monitor);
+				hasApplyErrors |= correlateAndPossiblyApply(factory, vtOptions, monitor);
 				monitor.doIncrementProgress();
 			}
 		}
@@ -360,7 +352,7 @@ public class AutoVersionTrackingTask extends Task {
 				toolOptions.getBoolean(VTOptionDefines.APPLY_IMPLIED_MATCHES_OPTION, true);
 			int minVotes = toolOptions.getInt(VTOptionDefines.MIN_VOTES_OPTION, 2);
 			int maxConflicts = toolOptions.getInt(VTOptionDefines.MAX_CONFLICTS_OPTION, 2);
-			hasApplyErrors = hasApplyErrors |
+			hasApplyErrors |=
 				createImpliedMatches(applyImpliedMatches, minVotes, maxConflicts, monitor);
 		}
 
@@ -378,12 +370,10 @@ public class AutoVersionTrackingTask extends Task {
 	}
 
 	/**
-	 * Method to create implied matches for the existing applied matches in the current session
-	 * @param applyGoodMatches if true, create applied matches for "good" implied matches based on
-	 * votes/conflict information. For all the applied implied matches, rerun the creation of 
-	 * applied matches until no new ones found.
+	 * Method to create implied matches for the existing applied matches in the current session 
 	 * @param applyGoodMatches if true, apply matches if minVotes met and maxConflicts not exceeded 
-	 * for particular match, if false, don't apply any matches
+	 * for particular match, if false, don't apply any matches. For all the applied implied matches, 
+	 * rerun the creation of applied matches until no new ones found.
 	 * @param minVotes minimum votes needed to apply a match
 	 * @param maxConflicts maximum conflicts allowed to apply a match
 	 * @param monitor the task monitor
@@ -646,7 +636,7 @@ public class AutoVersionTrackingTask extends Task {
 				continue;
 			}
 
-			if (hasAcceptedRelatedAssociation(association, monitor)) {
+			if (hasAcceptedRelatedAssociation(association)) {
 				Msg.warn(AutoVersionTrackingTask.class,
 					"This association has a related association with an accepted match so cannot " +
 						"make this association accepted which would try to block the already accepted " +
@@ -702,12 +692,11 @@ public class AutoVersionTrackingTask extends Task {
 	 * Method to test whether any related associations (ie associations with either the same source 
 	 * or the same destination address) have already been accepted
 	 * @param association the given association (src/dest match pair)
-	 * @param taskMonitor the task monitor
 	 * @return true if any related associations have already been accepted, false otherwise
 	 * @throws CancelledException if cancelled
 	 */
-	private boolean hasAcceptedRelatedAssociation(VTAssociation association,
-			TaskMonitor taskMonitor) throws CancelledException {
+	private boolean hasAcceptedRelatedAssociation(VTAssociation association)
+			throws CancelledException {
 
 		VTAssociationManager vtAssocManager = session.getAssociationManager();
 
@@ -745,7 +734,7 @@ public class AutoVersionTrackingTask extends Task {
 	 * function pair association or it would have been identified as a unique match by the exact 
 	 * unique function instruction correltor. This method attempts to find unique matches from 
 	 * within the related subsets by comparing operand information. 
-	 * @param matches The set of matches from the duplicate function instruction correlator
+	 * @param matchSet The set of matches from the duplicate function instruction correlator
 	 * @param monitor Allows user to cancel
 	 * @return true if there are any markup errors, false if no markup errors
 	 * @throws CancelledException if cancelled
@@ -1169,7 +1158,8 @@ public class AutoVersionTrackingTask extends Task {
 	 * Method to check to see if both addresses have functions at them or the same data type at them
 	 * @param addr1 the first Address
 	 * @param addr2 the second Address
-	 * @return
+	 * @return true if same operand type (ie both functions, both same data type, same internal 
+	 * function reference
 	 */
 	private boolean isSameOperandType(Address addr1, Address addr2) {
 
@@ -1179,9 +1169,22 @@ public class AutoVersionTrackingTask extends Task {
 			if (function2 != null) {
 				return true;
 			}
-			else {
-				return false;
+			return false;
+		}
+
+		// are both references to same offset in the mapped functions
+		function1 = sourceProgram.getFunctionManager().getFunctionContaining(addr1);
+		if (function1 != null) {
+			Function function2 =
+				destinationProgram.getFunctionManager().getFunctionContaining(addr2);
+			if (function2 != null) {
+				long offsetInFunction1 = getOffsetInFunction(function1, addr1);
+				long offsetInFunction2 = getOffsetInFunction(function2, addr2);
+				if (offsetInFunction1 == offsetInFunction2) {
+					return true;
+				}
 			}
+			return false;
 		}
 
 		Data data1 = sourceProgram.getListing().getDataAt(addr1);
@@ -1275,9 +1278,7 @@ public class AutoVersionTrackingTask extends Task {
 			// get offset from top of function to use in function to operandMap map
 			// can be positive or negative offset (positive means instruction address is after 
 			// the entry address, negative means instruction address is before entry address)
-			Long entryOffset = function.getEntryPoint().getOffset();
-			Long instOffset = inst.getAddress().getOffset();
-			Long offset = instOffset - entryOffset;
+			long offset = getOffsetInFunction(function, inst.getAddress());
 
 			offsetToOperandsMap.put(offset, map);
 		}
@@ -1287,6 +1288,15 @@ public class AutoVersionTrackingTask extends Task {
 		}
 
 		return offsetToOperandsMap;
+	}
+
+	private long getOffsetInFunction(Function function, Address addressInFunction) {
+
+		long entryOffset = function.getEntryPoint().getOffset();
+		long addrOffset = addressInFunction.getOffset();
+		long offset = addrOffset - entryOffset;
+
+		return offset;
 	}
 
 	/**
@@ -1343,7 +1353,7 @@ public class AutoVersionTrackingTask extends Task {
 		// skip already accepted or blocked matches
 		if (association.getStatus() == VTAssociationStatus.AVAILABLE) {
 
-			if (hasAcceptedRelatedAssociation(association, monitor)) {
+			if (hasAcceptedRelatedAssociation(association)) {
 				Msg.warn(AutoVersionTrackingTask.class,
 					"This association has a related association with an accepted match so cannot " +
 						"make this association accepted which would try to block the already accepted " +
